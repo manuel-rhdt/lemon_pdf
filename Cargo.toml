@@ -1,0 +1,6 @@
+[package]
+name = "lemon_pdf"
+version = "0.1.0"
+authors = ["Manuel Reinhardt <manuel.rhdt@gmail.com>"]
+
+[dependencies]
