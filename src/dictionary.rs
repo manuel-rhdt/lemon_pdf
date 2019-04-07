@@ -11,33 +11,23 @@
 //    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
-#![deny(missing_debug_implementations)]
 
-extern crate failure;
-extern crate flate2;
-#[macro_use]
-extern crate derive_more;
-extern crate byteorder;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::io::Result;
 
-pub mod array;
-mod context;
-pub mod content;
-mod crossref;
-pub mod dictionary;
-pub mod font;
-pub mod object;
-pub mod pagetree;
-pub mod stream;
-mod trailer;
+use crate::object::{Formatter, Object, PdfFormat, Value};
 
-pub use crate::context::*;
-pub use pagetree::Page;
-pub use content::Pt;
+pub type Dictionary = HashMap<String, Object<Value>>;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+impl<T: PdfFormat + Eq + Hash, U: PdfFormat, S: std::hash::BuildHasher> PdfFormat
+    for HashMap<T, U, S>
+{
+    fn write(&self, f: &mut Formatter) -> Result<()> {
+        let mut dict_fmt = f.format_dictionary();
+        for (key, value) in self.iter() {
+            dict_fmt = dict_fmt.key_value(key, value);
+        }
+        dict_fmt.finish()
     }
 }
