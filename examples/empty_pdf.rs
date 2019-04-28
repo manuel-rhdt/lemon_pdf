@@ -15,14 +15,19 @@
 extern crate failure;
 extern crate lemon_pdf;
 
+use encoding_rs::WINDOWS_1252;
+
 use std::fs::File;
 use std::io::BufWriter;
 
 use failure::Error;
 use lemon_pdf::font::builtin::BuiltInFont;
-use lemon_pdf::font::Font;
+use lemon_pdf::font::{
+    encoding::{EncodingEntry, PredefinedEncoding},
+    Font,
+};
 use lemon_pdf::pagetree::Page;
-use lemon_pdf::{Context, Version, Pt};
+use lemon_pdf::{Context, Pt, Version};
 
 fn main() -> Result<(), Error> {
     let file = BufWriter::new(File::create("testpdf.pdf")?);
@@ -31,14 +36,17 @@ fn main() -> Result<(), Error> {
 
     let mut page = Page::new();
     page.add_content(&mut context, None, |page_context| {
-        let font = BuiltInFont::TimesItalic.font(&mut page_context.pdf_context)?;
+        let mut font = BuiltInFont::TimesItalic.font(&mut page_context.pdf_context)?;
+        font.encoding = Some(EncodingEntry::Predefined(
+            PredefinedEncoding::WinAnsiEncoding,
+        ));
         let font_ref = page_context.pdf_context.write_object(Font::Simple(font))?;
         let font_key = page_context.add_font(font_ref);
 
         page_context.begin_text()?;
         page_context.set_font(&font_key, Pt(48.0))?;
         page_context.set_position(Pt(20.0), Pt(40.0))?;
-        page_context.draw_simple_glyphs(b"Die Kr\xFAnung allen Gluecks")?;
+        page_context.draw_simple_glyphs(&WINDOWS_1252.encode("Hello World!").0)?;
         page_context.end_text()?;
         Ok(())
     })?;

@@ -31,8 +31,8 @@ pub mod stream;
 mod trailer;
 
 pub use crate::context::*;
-pub use pagetree::Page;
-pub use content::Pt;
+pub use self::pagetree::Page;
+pub use self::content::Pt;
 
 #[cfg(test)]
 mod tests {

@@ -152,19 +152,19 @@ impl Page {
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct MediaBox {
-    pub x: Pt,
-    pub y: Pt,
-    pub width: Pt,
-    pub height: Pt,
+    pub xmin: Pt,
+    pub ymin: Pt,
+    pub xmax: Pt,
+    pub ymax: Pt,
 }
 
 impl MediaBox {
-    pub fn new(x: Pt, y: Pt, width: Pt, height: Pt) -> Self {
+    pub fn new(xmin: Pt, ymin: Pt, xmax: Pt, ymax: Pt) -> Self {
         MediaBox {
-            x,
-            y,
-            width,
-            height,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
         }
     }
 
@@ -177,7 +177,7 @@ impl MediaBox {
     }
 
     pub fn as_array(self) -> [Pt; 4] {
-        [self.x, self.y, self.width, self.height]
+        [self.xmin, self.ymin, self.xmax, self.ymax]
     }
 }
 
@@ -190,10 +190,10 @@ impl Default for Page {
 impl From<MediaBox> for Object<Value> {
     fn from(mediabox: MediaBox) -> Object<Value> {
         let mut array = Array::new();
-        array.push(Object::Direct(mediabox.x.0.into()));
-        array.push(Object::Direct(mediabox.y.0.into()));
-        array.push(Object::Direct(mediabox.width.0.into()));
-        array.push(Object::Direct(mediabox.height.0.into()));
+        array.push(Object::Direct(mediabox.xmin.0.into()));
+        array.push(Object::Direct(mediabox.ymin.0.into()));
+        array.push(Object::Direct(mediabox.xmax.0.into()));
+        array.push(Object::Direct(mediabox.ymax.0.into()));
         Object::Direct(array.into())
     }
 }
