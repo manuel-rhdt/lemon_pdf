@@ -20,7 +20,7 @@ use lemon_pdf_derive::PdfFormat;
 
 use crate::array::Array;
 use crate::content::PageContext;
-use crate::context::Context;
+use crate::document::Context;
 use crate::dictionary::Dictionary;
 use crate::object::{IndirectReference, Object, PdfFormat, Value};
 use crate::stream::{StreamEncoder, StreamFilter};

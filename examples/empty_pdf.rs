@@ -45,13 +45,16 @@ fn main() -> Result<(), Error> {
 
         page_context.begin_text()?;
         page_context.set_font(&font_key, Pt(48.0))?;
-        page_context.set_position(Pt(20.0), Pt(40.0))?;
+        page_context.set_position(Pt(20.0), Pt(20.0))?;
         page_context.draw_simple_glyphs(&WINDOWS_1252.encode("Hello World!").0)?;
         page_context.end_text()?;
         Ok(())
     })?;
 
     context.add_page(page);
+
+    context.document_info.insert("Title".to_owned(), b"My (Document)".to_vec());
+
     context.finish()?;
     Ok(())
 }

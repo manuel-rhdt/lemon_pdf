@@ -5,7 +5,7 @@ use std::io::Result;
 use lemon_pdf_derive::PdfFormat;
 
 use super::{descriptor::FontDescriptor, encoding, FontType, FontUnit};
-use crate::context::Context;
+use crate::document::Context;
 use crate::object::{IndirectReference, PdfFormat};
 
 #[derive(Debug, Copy, Clone)]

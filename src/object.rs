@@ -72,7 +72,7 @@ impl<'a, 'b> DictionaryFormatter<'a, 'b> {
             key.write(formatter)?;
             write!(formatter, " ")?;
             value.write(formatter)?;
-            write!(formatter, "\n")?;
+            writeln!(formatter)?;
             Ok(())
         });
         self
@@ -154,7 +154,16 @@ impl PdfFormat for String {
 impl<'a> PdfFormat for &'a [u8] {
     fn write(&self, output: &mut Formatter) -> Result<()> {
         write!(output, "(")?;
-        output.write_all(self)?;
+        for &byte in self.iter() {
+            let escape = match byte {
+                b'\\' | b'(' | b')' => true,
+                _ => false,
+            };
+            if escape {
+                write!(output, "\\")?;
+            }
+            output.write_all(&[byte])?;
+        }
         write!(output, ")")
     }
 }
@@ -257,6 +266,9 @@ impl<T> IndirectReference<T> {
         self.raw.generation
     }
 
+    /// Converts an indirect reference to point to an object of type `U`.
+    /// 
+    /// This function is to be used with care, else invalid PDF documents may be created.
     pub fn convert<U>(self) -> IndirectReference<U> {
         IndirectReference::new(self.number(), self.generation())
     }

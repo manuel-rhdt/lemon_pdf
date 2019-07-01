@@ -20,7 +20,7 @@ extern crate derive_more;
 extern crate byteorder;
 
 pub mod array;
-mod context;
+mod document;
 pub mod content;
 mod crossref;
 pub mod dictionary;
@@ -30,7 +30,7 @@ pub mod pagetree;
 pub mod stream;
 mod trailer;
 
-pub use crate::context::*;
+pub use crate::document::*;
 pub use self::pagetree::Page;
 pub use self::content::Pt;
 

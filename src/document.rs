@@ -14,6 +14,7 @@
 
 use std::io::prelude::*;
 use std::io::Error;
+use std::collections::HashMap;
 
 use lemon_pdf_derive::PdfFormat;
 
@@ -21,6 +22,8 @@ use crate::crossref::CrossRef;
 use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference};
 use crate::pagetree::{Page, Pages};
 use crate::trailer::Trailer;
+
+pub type DocumentInfo = HashMap<String, Vec<u8>>;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Version {
@@ -97,6 +100,9 @@ pub struct Context<W> {
     pub(crate) crossref: CrossRef,
     document_catalog: Option<DocumentCatalog>,
     page_tree: Option<Pages>,
+    /// If this hash map is not empty, a document information dictionary with the corresponding
+    /// entries will be created.
+    pub document_info: DocumentInfo,
 }
 
 impl<W: Write> Context<W> {
@@ -107,6 +113,7 @@ impl<W: Write> Context<W> {
             crossref: Default::default(),
             document_catalog: Some(DocumentCatalog::default()),
             page_tree: Some(Pages::new()),
+            document_info: Default::default(),
         };
         context.start_pdf()?;
         Ok(context)
@@ -143,9 +150,9 @@ impl<W: Write> Context<W> {
     ) -> Result<(), Error> {
         // update placeholder entry in crossref
         self.crossref.get_entry_mut(reference.number as usize).0 = self.output.offset();
-        write!(
+        writeln!(
             self.output,
-            "{} {} obj\n",
+            "{} {} obj",
             reference.number, reference.generation
         )?;
         let mut formatter = Formatter {
@@ -166,10 +173,12 @@ impl<W: Write> Context<W> {
         &mut self,
         crossref_offset: u32,
         document_catalog: IndirectReference<DocumentCatalog>,
+        document_info: Option<IndirectReference<DocumentInfo>>
     ) -> Result<(), Error> {
         let mut trailer = Trailer {
             crossref_offset,
             document_catalog,
+            document_info
         };
         trailer.write(self)?;
         Ok(())
@@ -186,16 +195,30 @@ impl<W: Write> Context<W> {
         self.write_object(catalog)
     }
 
+    fn write_document_info(&mut self) -> Result<IndirectReference<DocumentInfo>, Error> {
+        let doc_info = std::mem::replace(&mut self.document_info, HashMap::default());
+        self.write_object(doc_info)
+    }
+
     /// Finish the `Context` and flush all remaining writes.
     pub fn finish(mut self) -> Result<(), Error> {
         let document_catalog = self.write_document_catalog()?;
+        let document_info = if !self.document_info.is_empty() {
+            Some(self.write_document_info()?)
+        } else {
+            None
+        };
 
         let offset = self.output.offset();
         let mut formatter = Formatter {
             writer: &mut self.output,
         };
         self.crossref.write(&mut formatter)?;
-        self.write_trailer(offset as u32, document_catalog)?;
+        self.write_trailer(offset as u32, document_catalog, document_info)?;
         self.output.flush()
+    }
+
+    pub(crate) fn current_offset(&self) -> u64 {
+        self.output.offset()
     }
 }
