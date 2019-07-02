@@ -133,7 +133,7 @@ impl Page {
         &mut self,
         context: &mut Context<W>,
         stream_filter: Option<StreamFilter>,
-        content_f: impl Fn(&mut PageContext<W>) -> Result<()>,
+        content_f: impl FnOnce(&mut PageContext<W>) -> Result<()>,
     ) -> Result<()> {
         let mut page_context = self.get_context(context, stream_filter);
         content_f(&mut page_context)?;
