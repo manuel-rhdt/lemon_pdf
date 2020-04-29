@@ -1,6 +1,8 @@
 use crate::object::{Object, PdfFormat, Value};
 use lemon_pdf_derive::PdfFormat;
 
+use std::convert::TryFrom;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PdfFormat)]
 pub enum PredefinedEncoding {
     StandardEncoding,
@@ -9,6 +11,19 @@ pub enum PredefinedEncoding {
 }
 
 impl PredefinedEncoding {
+    pub fn decode(self, code: u8) -> Option<&'static str> {
+        let table = match self {
+            PredefinedEncoding::StandardEncoding => STANDARD_ENCODING,
+            PredefinedEncoding::WinAnsiEncoding => WIN_ANSI_ENCODING,
+            PredefinedEncoding::MacRomanEncoding => MAC_ROMAN_ENCODING,
+        };
+        if table[code as usize].is_empty() {
+            None
+        } else {
+            Some(table[code as usize])
+        }
+    }
+
     pub fn encode(self, char_name: &str) -> Option<u8> {
         let table = match self {
             PredefinedEncoding::StandardEncoding => STANDARD_ENCODING,
@@ -18,7 +33,7 @@ impl PredefinedEncoding {
         table
             .iter()
             .position(|&entry| entry == char_name)
-            .map(|index| index as u8)
+            .and_then(|index| u8::try_from(index).ok())
     }
 }
 
@@ -38,6 +53,13 @@ impl EncodingEntry {
     pub fn encode(&self, char_name: &str) -> Option<u8> {
         match self {
             EncodingEntry::Predefined(encoding) => encoding.encode(char_name),
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn decode(&self, code: u8) -> Option<&'static str> {
+        match self {
+            EncodingEntry::Predefined(encoding) => encoding.decode(code),
             _ => unimplemented!(),
         }
     }
