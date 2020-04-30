@@ -27,12 +27,12 @@ use lemon_pdf::font::{
     Font,
 };
 use lemon_pdf::pagetree::Page;
-use lemon_pdf::{Context, Pt, Version};
+use lemon_pdf::{DocumentContext, Pt, Version};
 
 fn main() -> Result<(), Error> {
-    let file = BufWriter::new(File::create("testpdf.pdf")?);
+    let mut file = BufWriter::new(File::create("testpdf.pdf")?);
 
-    let mut context = Context::with_writer(file, Version::Pdf1_7)?;
+    let mut context = DocumentContext::with_writer(&mut file, Version::Pdf1_7)?;
 
     let mut page = Page::new();
     page.add_content(&mut context, None, |page_context| {
@@ -53,7 +53,9 @@ fn main() -> Result<(), Error> {
 
     context.add_page(page);
 
-    context.document_info.insert("Title".to_owned(), b"My (Document)".to_vec());
+    context
+        .document_info
+        .insert("Title".to_owned(), b"My (Document)".to_vec());
 
     context.finish()?;
     Ok(())

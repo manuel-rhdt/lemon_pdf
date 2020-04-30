@@ -20,24 +20,24 @@ use lemon_pdf_derive::PdfFormat;
 
 use crate::array::Array;
 use crate::dictionary::Dictionary;
-use crate::object::{Formatter, IndirectReference, Object, PdfFormat};
 use crate::font::Font;
+use crate::object::{Formatter, IndirectReference, Object, PdfFormat};
 use crate::pagetree::Page;
 use crate::stream::StreamEncoder;
-use crate::Context;
+use crate::DocumentContext;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, PdfFormat)]
 pub struct Pt(pub f64);
 
 #[derive(Debug)]
-pub struct PageContext<'a, 'context, W: 'context> {
+pub struct PageContext<'page, 'context, 'context_borrow> {
     pub(crate) fonts: HashMap<String, IndirectReference<Font>>,
     pub(crate) content_stream: StreamEncoder,
-    pub(crate) page: &'a mut Page,
-    pub pdf_context: &'context mut Context<W>,
+    pub(crate) page: &'page mut Page,
+    pub pdf_context: &'context_borrow mut DocumentContext<'context>,
 }
 
-impl<'a, 'context, W: Write> PageContext<'a, 'context, W> {
+impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_borrow> {
     pub fn add_font(&mut self, font: IndirectReference<Font>) -> String {
         let num_fonts = self.fonts.len();
         let key = format!("TT{}", num_fonts);

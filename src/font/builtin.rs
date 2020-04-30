@@ -8,7 +8,7 @@ use super::{
     descriptor::{FontDescriptor, FontFlags},
     encoding, FontType, FontUnit,
 };
-use crate::document::Context;
+use crate::document::DocumentContext;
 use crate::object::{IndirectReference, PdfFormat};
 
 #[derive(Debug, Copy, Clone)]
@@ -90,7 +90,7 @@ impl SimpleFont {
 }
 
 impl BuiltInFont {
-    pub fn font(self, context: &mut Context<impl std::io::Write>) -> Result<SimpleFont> {
+    pub fn font(self, context: &mut DocumentContext) -> Result<SimpleFont> {
         let metrics = self.metrics();
 
         let font_descriptor = FontDescriptor {

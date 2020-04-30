@@ -15,11 +15,11 @@
 use std::io::{Result, Write};
 use std::time::SystemTime;
 
-use crate::document::{Context, DocumentCatalog, DocumentInfo};
+use crate::document::{DocumentContext, DocumentCatalog, DocumentInfo};
 use crate::object::{Formatter, IndirectReference, PdfFormat};
 
-use crypto::md5::Md5;
 use crypto::digest::Digest;
+use crypto::md5::Md5;
 
 #[derive(Debug, Clone)]
 struct HexString(String);
@@ -42,11 +42,11 @@ fn get_digest(file_len: u64) -> HexString {
 pub struct Trailer {
     pub crossref_offset: u32,
     pub(crate) document_catalog: IndirectReference<DocumentCatalog>,
-    pub(crate) document_info: Option<IndirectReference<DocumentInfo>>
+    pub(crate) document_info: Option<IndirectReference<DocumentInfo>>,
 }
 
 impl Trailer {
-    pub(crate) fn write(&mut self, context: &mut Context<impl Write>) -> Result<()> {
+    pub(crate) fn write(&mut self, context: &mut DocumentContext) -> Result<()> {
         writeln!(context.output, "trailer")?;
         let digest = get_digest(context.current_offset());
 
@@ -58,7 +58,7 @@ impl Trailer {
             .key_value(&"Size", &context.crossref.len())
             .key_value(&"Root", &self.document_catalog)
             .key_value(&"ID", &[digest.clone(), digest]);
-        
+
         if let Some(document_info) = self.document_info {
             formatter = formatter.key_value(&"Info", &document_info);
         }

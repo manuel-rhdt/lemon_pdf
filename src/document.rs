@@ -12,9 +12,9 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
+use std::collections::HashMap;
 use std::io::prelude::*;
 use std::io::Error;
-use std::collections::HashMap;
 
 use lemon_pdf_derive::PdfFormat;
 
@@ -93,9 +93,8 @@ pub(crate) struct DocumentCatalog {
     pages: Option<IndirectReference<Pages>>,
 }
 
-#[derive(Debug)]
-pub struct Context<W> {
-    pub(crate) output: OffsetTrackingWriter<W>,
+pub struct DocumentContext<'a> {
+    pub(crate) output: OffsetTrackingWriter<Box<dyn Write + 'a>>,
     pub version: Version,
     pub(crate) crossref: CrossRef,
     document_catalog: Option<DocumentCatalog>,
@@ -105,10 +104,22 @@ pub struct Context<W> {
     pub document_info: DocumentInfo,
 }
 
-impl<W: Write> Context<W> {
-    pub fn with_writer(writer: W, version: Version) -> Result<Self, Error> {
-        let mut context = Context {
-            output: OffsetTrackingWriter::new(writer),
+impl<'a> std::fmt::Debug for DocumentContext<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DocumentContext")
+            .field("version", &self.version)
+            .field("crossref", &self.crossref)
+            .field("document_catalog", &self.document_catalog)
+            .field("page_tree", &self.page_tree)
+            .field("document_info", &self.document_info)
+            .finish()
+    }
+}
+
+impl<'a> DocumentContext<'a> {
+    pub fn with_writer<W: 'a + Write>(writer: W, version: Version) -> Result<Self, Error> {
+        let mut context = DocumentContext {
+            output: OffsetTrackingWriter::new(Box::new(writer)),
             version,
             crossref: Default::default(),
             document_catalog: Some(DocumentCatalog::default()),
@@ -173,12 +184,12 @@ impl<W: Write> Context<W> {
         &mut self,
         crossref_offset: u32,
         document_catalog: IndirectReference<DocumentCatalog>,
-        document_info: Option<IndirectReference<DocumentInfo>>
+        document_info: Option<IndirectReference<DocumentInfo>>,
     ) -> Result<(), Error> {
         let mut trailer = Trailer {
             crossref_offset,
             document_catalog,
-            document_info
+            document_info,
         };
         trailer.write(self)?;
         Ok(())

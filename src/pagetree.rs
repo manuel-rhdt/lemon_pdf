@@ -14,14 +14,14 @@
 
 use std::collections::HashMap;
 use std::f64::consts::SQRT_2;
-use std::io::{Result, Write};
+use std::io::Result;
 
 use lemon_pdf_derive::PdfFormat;
 
 use crate::array::Array;
 use crate::content::PageContext;
-use crate::document::Context;
 use crate::dictionary::Dictionary;
+use crate::document::DocumentContext;
 use crate::object::{IndirectReference, Object, PdfFormat, Value};
 use crate::stream::{StreamEncoder, StreamFilter};
 use crate::Pt;
@@ -67,7 +67,7 @@ impl Pages {
     // make all children indirect objects
     pub fn write_to_context(
         mut self,
-        context: &mut Context<impl Write>,
+        context: &mut DocumentContext,
     ) -> Result<IndirectReference<Pages>> {
         context.write_object_fn(|context, self_reference| {
             let mut array = Vec::new();
@@ -116,11 +116,11 @@ impl Page {
         self.media_box = media_box.as_array()
     }
 
-    fn get_context<'context, W: Write>(
+    fn get_context<'context, 'borrow>(
         &mut self,
-        context: &'context mut Context<W>,
+        context: &'borrow mut DocumentContext<'context>,
         stream_filter: Option<StreamFilter>,
-    ) -> PageContext<'_, 'context, W> {
+    ) -> PageContext<'_, 'context, 'borrow> {
         PageContext {
             fonts: HashMap::new(),
             page: self,
@@ -129,11 +129,11 @@ impl Page {
         }
     }
 
-    pub fn add_content<W: Write>(
+    pub fn add_content<'context, 'borrow>(
         &mut self,
-        context: &mut Context<W>,
+        context: &mut DocumentContext<'context>,
         stream_filter: Option<StreamFilter>,
-        content_f: impl FnOnce(&mut PageContext<W>) -> Result<()>,
+        content_f: impl FnOnce(&mut PageContext<'_, 'context, '_>) -> Result<()>,
     ) -> Result<()> {
         let mut page_context = self.get_context(context, stream_filter);
         content_f(&mut page_context)?;
