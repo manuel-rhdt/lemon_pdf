@@ -4,7 +4,10 @@ use std::io::Result;
 
 use lemon_pdf_derive::PdfFormat;
 
-use super::{descriptor::FontDescriptor, encoding, FontType, FontUnit};
+use super::{
+    descriptor::{FontDescriptor, FontFlags},
+    encoding, FontType, FontUnit,
+};
 use crate::document::Context;
 use crate::object::{IndirectReference, PdfFormat};
 
@@ -101,6 +104,18 @@ impl BuiltInFont {
             stem_v: Some(metrics.stem_v),
             ascent: metrics.ascender,
             descent: metrics.descender,
+            flags: match metrics.family_name {
+                "Helvetica" => FontFlags::NONSYMBOLIC,
+                "Times" => FontFlags::NONSYMBOLIC | FontFlags::SERIF,
+                "Courier" => FontFlags::NONSYMBOLIC | FontFlags::FIXED_PITCH | FontFlags::SERIF,
+                "Symbol" => FontFlags::SYMBOLIC,
+                "ZapfDingbats" => FontFlags::SYMBOLIC,
+                _ => FontFlags::default(),
+            } | if metrics.italic_angle != 0.0 {
+                FontFlags::ITALIC
+            } else {
+                FontFlags::empty()
+            },
             ..Default::default()
         };
         let font_descriptor = context.write_object(font_descriptor)?;
