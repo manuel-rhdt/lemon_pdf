@@ -1,8 +1,10 @@
 use lemon_pdf_derive::PdfFormat;
 
 use super::FontUnit;
-use crate::object::PdfFormat;
+use crate::object::{PdfFormat, IndirectReference};
 use bitflags::bitflags;
+
+use crate::stream::Stream;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PdfFormat)]
 pub enum FontStretch {
@@ -45,7 +47,11 @@ impl PdfFormat for FontFlags {
     }
 }
 
-#[derive(Debug, Default, PartialEq, PdfFormat)]
+fn is_default<T: Default + PartialEq>(val: &T) -> bool {
+    val == &T::default()
+}
+
+#[derive(Debug, Clone, Default, PartialEq, PdfFormat)]
 pub struct FontDescriptor {
     pub font_name: String,
     #[skip_if("Vec::is_empty")]
@@ -59,14 +65,27 @@ pub struct FontDescriptor {
     pub italic_angle: f64,
     pub ascent: FontUnit,
     pub descent: FontUnit,
+    #[skip_if("is_default")]
+    pub leading: FontUnit,
+    #[skip_if("is_default")]
+    pub cap_height: FontUnit,
+    #[skip_if("is_default")]
+    pub x_height: FontUnit,
+    #[skip_if("is_default")]
+    pub stem_h: FontUnit,
+    pub stem_v: FontUnit,
+    #[skip_if("is_default")]
+    pub avg_width: FontUnit,
+    #[skip_if("is_default")]
+    pub max_width: FontUnit,
+    #[skip_if("is_default")]
+    pub missing_width: FontUnit,
     #[skip_if("Option::is_none")]
-    pub leading: Option<FontUnit>,
+    pub font_file: Option<IndirectReference<Stream>>,
     #[skip_if("Option::is_none")]
-    pub cap_height: Option<FontUnit>,
+    pub font_file2: Option<IndirectReference<Stream>>,
     #[skip_if("Option::is_none")]
-    pub x_height: Option<FontUnit>,
-    #[skip_if("Option::is_none")]
-    pub stem_h: Option<FontUnit>,
-    #[skip_if("Option::is_none")]
-    pub stem_v: Option<FontUnit>,
+    pub font_file3: Option<IndirectReference<Stream>>,
+    #[skip_if("Vec::is_empty")]
+    pub char_set: Vec<u8>,
 }

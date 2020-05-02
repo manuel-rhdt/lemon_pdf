@@ -93,29 +93,32 @@ impl BuiltInFont {
     pub fn font(self, context: &mut DocumentContext) -> Result<SimpleFont> {
         let metrics = self.metrics();
 
+        let flags = match metrics.family_name {
+            "Helvetica" => FontFlags::NONSYMBOLIC,
+            "Times" => FontFlags::NONSYMBOLIC | FontFlags::SERIF,
+            "Courier" => FontFlags::NONSYMBOLIC | FontFlags::FIXED_PITCH | FontFlags::SERIF,
+            "Symbol" => FontFlags::SYMBOLIC,
+            "ZapfDingbats" => FontFlags::SYMBOLIC,
+            _ => FontFlags::default(),
+        };
+        let flags = if metrics.italic_angle != 0.0 {
+            flags | FontFlags::ITALIC
+        } else {
+            flags
+        };
+
         let font_descriptor = FontDescriptor {
             font_name: metrics.font_name.to_string(),
             font_family: metrics.family_name.as_bytes().to_owned(),
             font_b_box: metrics.font_bbox,
-            cap_height: Some(metrics.cap_height),
+            cap_height: metrics.cap_height,
             italic_angle: metrics.italic_angle,
-            x_height: Some(metrics.x_height),
-            stem_h: Some(metrics.stem_h),
-            stem_v: Some(metrics.stem_v),
+            x_height: metrics.x_height,
+            stem_h: metrics.stem_h,
+            stem_v: metrics.stem_v,
             ascent: metrics.ascender,
             descent: metrics.descender,
-            flags: match metrics.family_name {
-                "Helvetica" => FontFlags::NONSYMBOLIC,
-                "Times" => FontFlags::NONSYMBOLIC | FontFlags::SERIF,
-                "Courier" => FontFlags::NONSYMBOLIC | FontFlags::FIXED_PITCH | FontFlags::SERIF,
-                "Symbol" => FontFlags::SYMBOLIC,
-                "ZapfDingbats" => FontFlags::SYMBOLIC,
-                _ => FontFlags::default(),
-            } | if metrics.italic_angle != 0.0 {
-                FontFlags::ITALIC
-            } else {
-                FontFlags::empty()
-            },
+            flags,
             ..Default::default()
         };
         let font_descriptor = context.write_object(font_descriptor)?;

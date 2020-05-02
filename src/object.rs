@@ -232,7 +232,7 @@ impl From<f32> for Value {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct RawIndirectReference {
     pub number: i64,
-    pub generation: i64
+    pub generation: i64,
 }
 
 /// A reference to an indirect object.
@@ -242,7 +242,13 @@ pub struct RawIndirectReference {
 #[derive(Debug, PartialEq, Eq)]
 pub struct IndirectReference<T> {
     raw: RawIndirectReference,
-    _marker: PhantomData<T>
+    _marker: PhantomData<T>,
+}
+
+impl<T> Default for IndirectReference<T> {
+    fn default() -> Self {
+        IndirectReference::new(0, 0)
+    }
 }
 
 impl<T> Copy for IndirectReference<T> {}
@@ -255,7 +261,10 @@ impl<T> Clone for IndirectReference<T> {
 
 impl<T> IndirectReference<T> {
     pub(crate) fn new(number: i64, generation: i64) -> Self {
-        IndirectReference { raw: RawIndirectReference { number, generation }, _marker: PhantomData }
+        IndirectReference {
+            raw: RawIndirectReference { number, generation },
+            _marker: PhantomData,
+        }
     }
 
     pub fn number(&self) -> i64 {
@@ -267,7 +276,7 @@ impl<T> IndirectReference<T> {
     }
 
     /// Converts an indirect reference to point to an object of type `U`.
-    /// 
+    ///
     /// This function is to be used with care, else invalid PDF documents may be created.
     pub fn convert<U>(self) -> IndirectReference<U> {
         IndirectReference::new(self.number(), self.generation())
@@ -296,7 +305,7 @@ impl<T: PdfFormat> PdfFormat for Option<T> {
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum Object<T> {
     Direct(T),
-    Indirect(IndirectReference<T>)
+    Indirect(IndirectReference<T>),
 }
 
 impl<T> From<IndirectReference<T>> for Object<T> {

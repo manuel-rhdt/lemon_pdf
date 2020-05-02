@@ -19,6 +19,7 @@ use crate::object::PdfFormat;
 pub mod builtin;
 pub mod descriptor;
 pub mod encoding;
+pub mod type0;
 
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum Font {
@@ -47,6 +48,7 @@ impl std::ops::Sub for FontUnit {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PdfFormat)]
 pub enum FontType {
+    Type0,
     Type1,
     TrueType,
 }
