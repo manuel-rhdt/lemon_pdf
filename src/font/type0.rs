@@ -1,6 +1,6 @@
 use super::{descriptor::FontDescriptor, FontUnit, FontType};
 
-use crate::object::{IndirectReference, Object, PdfFormat};
+use crate::object::{IndirectReference, PdfFormat};
 use lemon_pdf_derive::PdfFormat;
 
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
