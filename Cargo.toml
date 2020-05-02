@@ -5,22 +5,22 @@ authors = ["Manuel Reinhardt <manuel.rhdt@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-failure = "^0.1"
-derive_more = "0.14.0"
-flate2 = "^1"
+failure = "0.1.8"
+derive_more = "0.99.5"
+flate2 = "1"
 byteorder = "1"
 lemon_pdf_derive = { path = "./lemon_pdf_derive" }
 rust-crypto = "0.2.36"
-bitflags = "1.2"
+bitflags = "1"
 
 [build-dependencies]
 afm = "0.1.2"
 glob = "0.3.0"
 pom = "1"
-quote = "0.6.11"
-proc-macro2 = "0.4.27"
-csv = "1.0.5"
+quote = "1"
+proc-macro2 = "1"
+csv = "1"
 Inflector = "0.11.4"
 
 [dev-dependencies]
-encoding_rs = "0.8.17"
+encoding_rs = "0.8.22"
