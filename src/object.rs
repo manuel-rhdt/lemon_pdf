@@ -13,7 +13,7 @@
 //    limitations under the License.
 
 use std::io::{Result, Write};
-use std::marker::PhantomData;
+use std::{fmt::Debug, marker::PhantomData};
 
 use lemon_pdf_derive::PdfFormat;
 
@@ -116,7 +116,7 @@ impl<'a, 'b> ArrayFormatter<'a, 'b> {
     }
 }
 
-pub trait PdfFormat {
+pub trait PdfFormat: std::fmt::Debug {
     fn write(&self, output: &mut Formatter) -> Result<()>;
 }
 
@@ -204,7 +204,7 @@ impl PdfFormat for i64 {
     }
 }
 
-#[derive(Debug, Clone, From, PartialEq, PdfFormat)]
+#[derive(Debug, From, PdfFormat)]
 pub enum Value {
     Null,
     Boolean(bool),
@@ -239,10 +239,21 @@ pub struct RawIndirectReference {
 ///
 /// Indirect references to objects can be obtained using `write_object` or
 /// `write_object_fn` on the `Context`.
-#[derive(Debug, PartialEq, Eq)]
 pub struct IndirectReference<T> {
     raw: RawIndirectReference,
     _marker: PhantomData<T>,
+}
+
+impl<T> PartialEq for IndirectReference<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw() == other.raw()
+    }
+}
+
+impl<T> Debug for IndirectReference<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.raw().fmt(f)
+    }
 }
 
 impl<T> Default for IndirectReference<T> {

@@ -7,7 +7,7 @@ use syn::{
     Lit, LitStr, Meta, MetaList, NestedMeta, Path, TypeParam, Variant,
 };
 
-#[proc_macro_derive(PdfFormat, attributes(rename, skip_if))]
+#[proc_macro_derive(PdfFormat, attributes(rename, skip_if, omit_type))]
 pub fn pdf_format_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = proc_macro2::TokenStream::from(input);
 
@@ -48,7 +48,9 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
             let key_values = named.into_iter().filter_map(|field| {
                 let attr = parse_attributes(&field.attrs);
                 field.ident.as_ref().map(|ident| {
-                    let string = attr.rename.unwrap_or_else(|| to_pascal_case(&ident.to_string()));
+                    let string = attr
+                        .rename
+                        .unwrap_or_else(|| to_pascal_case(&ident.to_string()));
                     let key_value = quote! {
                         f = f.key_value(&#string, &self.#ident);
                     };
@@ -64,11 +66,20 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                 })
             });
 
-            let name_str = attr.rename.unwrap_or_else(|| to_pascal_case(&name.to_string()));
+            let type_key = if attr.omit_type {
+                quote! {}
+            } else {
+                let name_str = attr
+                    .rename
+                    .unwrap_or_else(|| to_pascal_case(&name.to_string()));
+                quote! { f = f.key_value(&"Type", &#name_str) }
+            };
+
             quote! {
                 #impl_line {
                     fn write(&self, f: &mut crate::object::Formatter) -> std::io::Result<()> {
-                        let mut f = f.format_dictionary().key_value(&"Type", &#name_str);
+                        let mut f = f.format_dictionary();
+                        #type_key;
                         #(#key_values)*
                         f.finish()
                     }
@@ -126,6 +137,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
 
 #[derive(Default)]
 struct StructAttr {
+    omit_type: bool,
     rename: Option<String>,
     skip_if: Option<Path>,
 }
@@ -145,8 +157,16 @@ impl StructAttr {
         }
     }
 
+    fn omit_type(val: bool) -> Self {
+        StructAttr {
+            omit_type: val,
+            ..Default::default()
+        }
+    }
+
     fn or(self, other: StructAttr) -> Self {
         StructAttr {
+            omit_type: self.omit_type | other.omit_type,
             rename: self.rename.or(other.rename),
             skip_if: self.skip_if.or(other.skip_if),
         }
@@ -171,6 +191,13 @@ fn parse_attributes(attribute: &[Attribute]) -> StructAttr {
                         match nested.iter().next() {
                             Some(NestedMeta::Literal(Lit::Str(str_lit))) => {
                                 Some(StructAttr::skip_if(str_lit.parse().unwrap()))
+                            }
+                            _ => None,
+                        }
+                    } else if ident == "omit_type" {
+                        match nested.iter().next() {
+                            Some(NestedMeta::Literal(Lit::Bool(bool_lit))) => {
+                                Some(StructAttr::omit_type(bool_lit.value))
                             }
                             _ => None,
                         }

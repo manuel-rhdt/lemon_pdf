@@ -15,18 +15,52 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::io::Result;
+use std::ops::Deref;
 
-use crate::object::{Formatter, Object, PdfFormat, Value};
+use crate::object::{Formatter, PdfFormat};
 
-pub type Dictionary = HashMap<String, Object<Value>>;
+pub type Dictionary = HashMap<String, Box<dyn PdfFormat>>;
 
-impl<T: PdfFormat + Eq + Hash, U: PdfFormat, S: std::hash::BuildHasher> PdfFormat
-    for HashMap<T, U, S>
+trait Helper {
+    fn as_trait(&self) -> &dyn PdfFormat;
+}
+
+impl<T: PdfFormat + Sized> Helper for T {
+    fn as_trait(&self) -> &dyn PdfFormat {
+        self as &dyn PdfFormat
+    }
+}
+
+impl Helper for &dyn PdfFormat {
+    fn as_trait(&self) -> &dyn PdfFormat {
+        *self
+    }
+}
+
+impl<T, U, S> PdfFormat for HashMap<T, U, S>
+where
+    T: PdfFormat + Eq + Hash,
+    U: PdfFormat,
+    S: std::hash::BuildHasher,
 {
     fn write(&self, f: &mut Formatter) -> Result<()> {
         let mut dict_fmt = f.format_dictionary();
         for (key, value) in self.iter() {
             dict_fmt = dict_fmt.key_value(key, value);
+        }
+        dict_fmt.finish()
+    }
+}
+
+impl<T, S> PdfFormat for HashMap<T, Box<dyn PdfFormat>, S>
+where
+    T: PdfFormat + Eq + Hash,
+    S: std::hash::BuildHasher,
+{
+    fn write(&self, f: &mut Formatter) -> Result<()> {
+        let mut dict_fmt = f.format_dictionary();
+        for (key, value) in self.iter() {
+            dict_fmt = dict_fmt.key_value(key, value.deref());
         }
         dict_fmt.finish()
     }

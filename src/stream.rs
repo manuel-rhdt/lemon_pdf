@@ -13,12 +13,13 @@
 //    limitations under the License.
 
 use std::io::{Cursor, Result, Write};
+use std::ops::Deref;
 
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 
 use crate::dictionary::Dictionary;
-use crate::object::{Formatter, PdfFormat, Value};
+use crate::object::{Formatter, Object, PdfFormat, Value};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum StreamFilter {
@@ -91,7 +92,7 @@ impl From<StreamEncoder> for Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct Stream {
     // a Vec of bytes that can be decoded using the filter
     bytes: Vec<u8>,
@@ -102,12 +103,16 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub(crate) fn with_bytes(bytes: Vec<u8>, filter: Option<StreamFilter>) -> Self {
+    pub fn with_bytes(bytes: Vec<u8>, filter: Option<StreamFilter>) -> Self {
         Stream {
             bytes,
             filter,
             additional_keys: Default::default(),
         }
+    }
+
+    pub fn add_key_value(&mut self, key: String, value: Box<dyn PdfFormat>) {
+        self.additional_keys.insert(key, value);
     }
 }
 
@@ -120,7 +125,7 @@ impl PdfFormat for Stream {
         }
         let mut dict_formatter = dict_formatter.key_value(&"Length", &self.bytes.len());
         for (key, value) in self.additional_keys.iter() {
-            dict_formatter = dict_formatter.key_value(key, value);
+            dict_formatter = dict_formatter.key_value(key, value.deref());
         }
         dict_formatter.finish()?;
 

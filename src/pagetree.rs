@@ -20,13 +20,13 @@ use lemon_pdf_derive::PdfFormat;
 
 use crate::array::Array;
 use crate::content::PageContext;
-use crate::dictionary::Dictionary;
 use crate::document::DocumentContext;
+use crate::font::Font;
 use crate::object::{IndirectReference, Object, PdfFormat, Value};
-use crate::stream::{StreamEncoder, StreamFilter};
+use crate::stream::{Stream, StreamEncoder, StreamFilter};
 use crate::Pt;
 
-#[derive(Debug, PartialEq, Clone, PdfFormat)]
+#[derive(Debug, Clone, PdfFormat)]
 pub struct Pages {
     count: i64,
     #[skip_if("Option::is_none")]
@@ -44,7 +44,7 @@ impl Default for Pages {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, PdfFormat)]
+#[derive(Clone, Debug, PdfFormat)]
 enum PageTreeNode {
     Tree(Pages),
     Page(Page),
@@ -93,22 +93,28 @@ impl Pages {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, PdfFormat)]
+#[omit_type(true)]
+pub struct ResourceDictionary {
+    pub font: HashMap<String, IndirectReference<Font>>,
+}
+
 /// A convenience struct to create PDF pages.
-#[derive(Clone, Debug, PartialEq, PdfFormat)]
+#[derive(Clone, Debug, PdfFormat)]
 pub struct Page {
-    pub resources: Option<Object<Value>>,
+    pub resources: Option<ResourceDictionary>,
     pub media_box: [Pt; 4],
     #[skip_if("Option::is_none")]
     pub parent: Option<IndirectReference<Pages>>,
-    pub contents: Array,
+    pub contents: Vec<IndirectReference<Stream>>,
 }
 impl Page {
     pub fn new() -> Self {
         Page {
-            resources: Some(Object::Direct(Dictionary::new().into())),
+            resources: None,
             media_box: MediaBox::paper_din_a(4).as_array(),
             parent: None,
-            contents: Array::new(),
+            contents: Vec::new()
         }
     }
 
@@ -141,9 +147,9 @@ impl Page {
         Ok(())
     }
 
-    pub fn set_resources(&mut self, resources: impl Into<Object<Value>>) {
-        self.resources = Some(resources.into())
-    }
+    // pub fn set_resources(&mut self, resources: impl Into<Object<Value>>) {
+    //     self.resources = Some(resources.into())
+    // }
 
     pub(crate) fn set_parent(&mut self, parent: IndirectReference<Pages>) {
         self.parent = Some(parent)

@@ -22,7 +22,7 @@ use crate::array::Array;
 use crate::dictionary::Dictionary;
 use crate::font::Font;
 use crate::object::{Formatter, IndirectReference, Object, PdfFormat};
-use crate::pagetree::Page;
+use crate::pagetree::{Page, ResourceDictionary};
 use crate::stream::StreamEncoder;
 use crate::DocumentContext;
 
@@ -198,18 +198,17 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     }
 
     pub(crate) fn finish(self) -> Result<()> {
-        let mut font_dict = Dictionary::new();
+        let mut font_dict = HashMap::new();
         for (key, fontref) in self.fonts {
-            font_dict.insert(key, Object::Indirect(fontref.convert()));
+            font_dict.insert(key, fontref);
         }
-        let mut resources_dict = Dictionary::new();
-        resources_dict.insert("Font".to_string(), Object::Direct(font_dict.into()));
-        self.page.resources = Some(Object::Direct(resources_dict.into()));
+        let resources = ResourceDictionary { font: font_dict };
+        self.page.resources = Some(resources);
 
         let content_stream = self.content_stream.into_stream();
         let content_stream_ref = self.pdf_context.write_object(content_stream)?;
-        let mut array = Array::new();
-        array.push(Object::Indirect(content_stream_ref.convert()));
+        let mut array = Vec::new();
+        array.push(content_stream_ref);
         self.page.contents = array;
 
         Ok(())

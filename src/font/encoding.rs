@@ -82,7 +82,7 @@ pub struct Encoding {
     #[skip_if("Option::is_none")]
     pub base_encoding: Option<PredefinedEncoding>,
     #[skip_if("Option::is_none")]
-    pub differences: Option<Object<Vec<Value>>>,
+    pub differences: Option<Object<Vec<usize>>>,
 }
 
 pub const EXPERT_ENCODING: [&str; 256] = [
