@@ -17,6 +17,7 @@ use std::io::{Cursor, Result, Write};
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
 
+use crate::dictionary::Dictionary;
 use crate::object::{Formatter, PdfFormat, Value};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -90,18 +91,23 @@ impl From<StreamEncoder> for Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Stream {
     // a Vec of bytes that can be decoded using the filter
     bytes: Vec<u8>,
     // A filter that specifies how the bytes are to be decoded. A value of None
     // means that the bytes are not encoded in any way.
     filter: Option<StreamFilter>,
+    additional_keys: Dictionary,
 }
 
 impl Stream {
     pub(crate) fn with_bytes(bytes: Vec<u8>, filter: Option<StreamFilter>) -> Self {
-        Stream { bytes, filter }
+        Stream {
+            bytes,
+            filter,
+            additional_keys: Default::default(),
+        }
     }
 }
 
@@ -112,9 +118,11 @@ impl PdfFormat for Stream {
             None => {}
             Some(filter) => dict_formatter = dict_formatter.key_value(&"Filter", &filter),
         }
-        dict_formatter
-            .key_value(&"Length", &self.bytes.len())
-            .finish()?;
+        let mut dict_formatter = dict_formatter.key_value(&"Length", &self.bytes.len());
+        for (key, value) in self.additional_keys.iter() {
+            dict_formatter = dict_formatter.key_value(key, value);
+        }
+        dict_formatter.finish()?;
 
         write!(f, "\nstream\n")?;
         f.write_all(&self.bytes)?;
