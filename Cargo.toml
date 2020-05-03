@@ -12,6 +12,7 @@ byteorder = "1"
 lemon_pdf_derive = { path = "./lemon_pdf_derive" }
 rust-crypto = "0.2.36"
 bitflags = "1"
+log = "0.4.8"
 
 [build-dependencies]
 afm = "0.1.2"

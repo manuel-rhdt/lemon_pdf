@@ -229,7 +229,7 @@ impl From<f32> for Value {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct RawIndirectReference {
     pub number: i64,
     pub generation: i64,

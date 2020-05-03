@@ -12,7 +12,7 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::prelude::*;
 use std::io::Error;
 
@@ -22,6 +22,7 @@ use crate::crossref::CrossRef;
 use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference};
 use crate::pagetree::{Page, Pages};
 use crate::trailer::Trailer;
+use log::error;
 
 pub type DocumentInfo = HashMap<String, Vec<u8>>;
 
@@ -102,6 +103,7 @@ pub struct DocumentContext<'a> {
     /// If this hash map is not empty, a document information dictionary with the corresponding
     /// entries will be created.
     pub document_info: DocumentInfo,
+    dangling_references: HashSet<RawIndirectReference>,
 }
 
 impl<'a> std::fmt::Debug for DocumentContext<'a> {
@@ -125,6 +127,7 @@ impl<'a> DocumentContext<'a> {
             document_catalog: Some(DocumentCatalog::default()),
             page_tree: Some(Pages::new()),
             document_info: Default::default(),
+            dangling_references: Default::default(),
         };
         context.start_pdf()?;
         Ok(context)
@@ -134,6 +137,22 @@ impl<'a> DocumentContext<'a> {
         writeln!(self.output, "{}", self.version.header())?;
         self.output.write_all(b"%\xff\xff\xff\xff\n")?;
         Ok(())
+    }
+
+    pub fn create_reference<T: PdfFormat>(&mut self) -> IndirectReference<T> {
+        let num = self.crossref.add_entry(0, 0);
+        let reference = IndirectReference::new(i64::from(num), 0);
+        self.dangling_references.insert(reference.raw());
+        reference
+    }
+
+    pub fn write_reference<T: PdfFormat>(
+        &mut self,
+        reference: IndirectReference<T>,
+        object: T,
+    ) -> Result<(), Error> {
+        self.dangling_references.remove(&reference.raw());
+        self.write_indirect_object(object, reference.raw())
     }
 
     /// Write an indirect object to the context and return an indirect reference to it.
@@ -213,6 +232,13 @@ impl<'a> DocumentContext<'a> {
 
     /// Finish the `Context` and flush all remaining writes.
     pub fn finish(mut self) -> Result<(), Error> {
+        for dangling_ref in &self.dangling_references {
+            error!(
+                "Created indirect reference {:?} but never assigned an object to it!",
+                dangling_ref
+            )
+        }
+
         let document_catalog = self.write_document_catalog()?;
         let document_info = if !self.document_info.is_empty() {
             Some(self.write_document_info()?)
