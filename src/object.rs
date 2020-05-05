@@ -20,6 +20,7 @@ use lemon_pdf_derive::PdfFormat;
 use crate::array::Array;
 use crate::dictionary::Dictionary;
 use crate::stream::Stream;
+use serde::Serialize;
 
 #[allow(missing_debug_implementations)]
 pub struct Formatter<'a> {
@@ -229,16 +230,22 @@ impl From<f32> for Value {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct RawIndirectReference {
-    pub number: i64,
-    pub generation: i64,
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename = "R")]
+pub struct RawIndirectReference(pub i64, pub i64);
+
+impl<T> From<IndirectReference<T>> for RawIndirectReference {
+    fn from(other: IndirectReference<T>) -> Self {
+        RawIndirectReference(other.number(), other.generation())
+    }
 }
 
 /// A reference to an indirect object.
 ///
 /// Indirect references to objects can be obtained using `write_object` or
 /// `write_object_fn` on the `Context`.
+#[derive(Serialize)]
+#[serde(into = "RawIndirectReference")]
 pub struct IndirectReference<T> {
     raw: RawIndirectReference,
     _marker: PhantomData<T>,
@@ -273,17 +280,17 @@ impl<T> Clone for IndirectReference<T> {
 impl<T> IndirectReference<T> {
     pub(crate) fn new(number: i64, generation: i64) -> Self {
         IndirectReference {
-            raw: RawIndirectReference { number, generation },
+            raw: RawIndirectReference(number, generation),
             _marker: PhantomData,
         }
     }
 
     pub fn number(&self) -> i64 {
-        self.raw.number
+        self.raw.0
     }
 
     pub fn generation(&self) -> i64 {
-        self.raw.generation
+        self.raw.1
     }
 
     /// Converts an indirect reference to point to an object of type `U`.

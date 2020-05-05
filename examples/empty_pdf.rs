@@ -12,7 +12,6 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-extern crate failure;
 extern crate lemon_pdf;
 
 use encoding_rs::WINDOWS_1252;
@@ -20,7 +19,7 @@ use encoding_rs::WINDOWS_1252;
 use std::fs::File;
 use std::io::BufWriter;
 
-use failure::Error;
+use std::error::Error;
 use lemon_pdf::font::builtin::BuiltInFont;
 use lemon_pdf::font::{
     encoding::{EncodingEntry, PredefinedEncoding},
@@ -29,7 +28,7 @@ use lemon_pdf::font::{
 use lemon_pdf::pagetree::Page;
 use lemon_pdf::{DocumentContext, Pt, Version};
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<(), Box<dyn Error>> {
     let mut file = BufWriter::new(File::create("testpdf.pdf")?);
 
     let mut context = DocumentContext::with_writer(&mut file, Version::Pdf1_7)?;
@@ -55,7 +54,7 @@ fn main() -> Result<(), Error> {
 
     context
         .document_info
-        .insert("Title".to_owned(), b"My (Document)".to_vec());
+        .insert("Title".to_owned(), b"My Document".to_vec());
 
     context.finish()?;
     Ok(())

@@ -13,11 +13,9 @@
 //    limitations under the License.
 #![deny(missing_debug_implementations)]
 
-extern crate failure;
-extern crate flate2;
+
 #[macro_use]
 extern crate derive_more;
-extern crate byteorder;
 
 pub mod array;
 mod document;
@@ -29,6 +27,8 @@ pub mod object;
 pub mod pagetree;
 pub mod stream;
 mod trailer;
+mod serializer;
+mod deserializer;
 
 pub use crate::document::*;
 pub use self::pagetree::Page;

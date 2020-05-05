@@ -18,10 +18,8 @@ use std::io::{Result, Write};
 use byteorder::{BigEndian, WriteBytesExt};
 use lemon_pdf_derive::PdfFormat;
 
-use crate::array::Array;
-use crate::dictionary::Dictionary;
 use crate::font::Font;
-use crate::object::{Formatter, IndirectReference, Object, PdfFormat};
+use crate::object::{Formatter, IndirectReference, PdfFormat};
 use crate::pagetree::{Page, ResourceDictionary};
 use crate::stream::StreamEncoder;
 use crate::DocumentContext;

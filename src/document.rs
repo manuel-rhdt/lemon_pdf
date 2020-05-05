@@ -16,11 +16,14 @@ use std::collections::{HashMap, HashSet};
 use std::io::prelude::*;
 use std::io::Error;
 
+use serde::Serialize;
+
 use lemon_pdf_derive::PdfFormat;
 
 use crate::crossref::CrossRef;
 use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference};
 use crate::pagetree::{Page, Pages};
+use crate::serializer::PdfSerializer;
 use crate::trailer::Trailer;
 use log::error;
 
@@ -139,20 +142,45 @@ impl<'a> DocumentContext<'a> {
         Ok(())
     }
 
-    pub fn create_reference<T: PdfFormat>(&mut self) -> IndirectReference<T> {
+    pub fn write_object1<T: serde::Serialize>(
+        &mut self,
+        object: T,
+    ) -> Result<IndirectReference<T>, Error> {
+        let reference = self.create_reference();
+        self.write_referenced_object(reference, object)?;
+        Ok(reference)
+    }
+
+    pub fn create_reference<T: serde::Serialize>(&mut self) -> IndirectReference<T> {
         let num = self.crossref.add_entry(0, 0);
         let reference = IndirectReference::new(i64::from(num), 0);
         self.dangling_references.insert(reference.raw());
         reference
     }
 
-    pub fn write_reference<T: PdfFormat>(
+    pub fn write_referenced_object<T: serde::Serialize>(
         &mut self,
         reference: IndirectReference<T>,
         object: T,
     ) -> Result<(), Error> {
         self.dangling_references.remove(&reference.raw());
-        self.write_indirect_object(object, reference.raw())
+        // update placeholder entry in crossref
+        self.crossref.get_entry_mut(reference.number() as usize).0 = self.output.offset();
+
+        let mut serializer = PdfSerializer {
+            output: &mut self.output,
+        };
+
+        #[derive(Serialize)]
+        #[serde(rename = "obj")]
+        struct Obj(i64, i64);
+
+        Obj(reference.number(), reference.generation())
+            .serialize(&mut serializer)
+            .unwrap();
+        object.serialize(&mut serializer).unwrap();
+        write!(self.output, "\nendobj\n")?;
+        Ok(())
     }
 
     /// Write an indirect object to the context and return an indirect reference to it.
@@ -179,12 +207,8 @@ impl<'a> DocumentContext<'a> {
         reference: RawIndirectReference,
     ) -> Result<(), Error> {
         // update placeholder entry in crossref
-        self.crossref.get_entry_mut(reference.number as usize).0 = self.output.offset();
-        writeln!(
-            self.output,
-            "{} {} obj",
-            reference.number, reference.generation
-        )?;
+        self.crossref.get_entry_mut(reference.0 as usize).0 = self.output.offset();
+        writeln!(self.output, "{} {} obj", reference.0, reference.1)?;
         let mut formatter = Formatter {
             writer: &mut self.output,
         };
@@ -227,9 +251,8 @@ impl<'a> DocumentContext<'a> {
 
     fn write_document_info(&mut self) -> Result<IndirectReference<DocumentInfo>, Error> {
         let doc_info = std::mem::replace(&mut self.document_info, HashMap::default());
-        self.write_object(doc_info)
+        self.write_object1(doc_info)
     }
-
     /// Finish the `Context` and flush all remaining writes.
     pub fn finish(mut self) -> Result<(), Error> {
         for dangling_ref in &self.dangling_references {
