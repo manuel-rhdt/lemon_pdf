@@ -29,7 +29,7 @@ pub struct Pt(pub f64);
 
 #[derive(Debug)]
 pub struct PageContext<'page, 'context, 'context_borrow> {
-    pub(crate) fonts: HashMap<String, IndirectReference<Font>>,
+    pub(crate) fonts: HashMap<IndirectReference<Font>, String>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -38,9 +38,11 @@ pub struct PageContext<'page, 'context, 'context_borrow> {
 impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_borrow> {
     pub fn add_font(&mut self, font: IndirectReference<Font>) -> String {
         let num_fonts = self.fonts.len();
-        let key = format!("TT{}", num_fonts);
-        self.fonts.insert(key.clone(), font);
-        key
+        let key = self
+            .fonts
+            .entry(font)
+            .or_insert_with(|| format!("F{}", num_fonts));
+        key.clone()
     }
 
     pub fn push_operand(&mut self, operand: impl PdfFormat) -> Result<()> {
@@ -197,8 +199,8 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
 
     pub(crate) fn finish(self) -> Result<()> {
         let mut font_dict = HashMap::new();
-        for (key, fontref) in self.fonts {
-            font_dict.insert(key, fontref);
+        for (font_ref, font_key) in self.fonts {
+            font_dict.insert(font_key, font_ref);
         }
         let resources = ResourceDictionary { font: font_dict };
         self.page.resources = Some(resources);

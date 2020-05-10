@@ -13,7 +13,7 @@
 //    limitations under the License.
 
 use std::io::{Result, Write};
-use std::{fmt::Debug, marker::PhantomData};
+use std::{fmt::Debug, hash::Hash, marker::PhantomData};
 
 use lemon_pdf_derive::PdfFormat;
 
@@ -254,6 +254,14 @@ pub struct IndirectReference<T> {
 impl<T> PartialEq for IndirectReference<T> {
     fn eq(&self, other: &Self) -> bool {
         self.raw() == other.raw()
+    }
+}
+
+impl<T> Eq for IndirectReference<T> {}
+
+impl<T> Hash for IndirectReference<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.raw.hash(state)
     }
 }
 
