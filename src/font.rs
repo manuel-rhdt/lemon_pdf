@@ -24,6 +24,7 @@ pub mod type0;
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum Font {
     Simple(builtin::SimpleFont),
+    Composite(type0::CompositeFont)
 }
 
 /// A postscript font unit (1/1000 of an EM)

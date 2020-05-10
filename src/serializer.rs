@@ -11,12 +11,6 @@ pub struct PdfSerializer<W> {
     pub output: W,
 }
 
-#[derive(Debug)]
-pub struct TupleStructSerializer<'a, W> {
-    serializer: &'a mut PdfSerializer<W>,
-    name: &'static str,
-}
-
 impl<'b, W: Write> Serializer for &'b mut PdfSerializer<W> {
     type Ok = ();
     type Error = Error;
@@ -67,13 +61,28 @@ impl<'b, W: Write> Serializer for &'b mut PdfSerializer<W> {
         Ok(write!(self.output, "{}", v)?)
     }
     fn serialize_char(self, v: char) -> Result<Self::Ok> {
-        Ok(write!(self.output, "{:?}", v)?)
+        Ok(write!(self.output, "({})", v)?)
     }
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
-        Ok(write!(self.output, "/{}", v)?)
+        self.serialize_bytes(v.as_bytes())
     }
-    fn serialize_bytes(self, _v: &[u8]) -> Result<Self::Ok> {
-        todo!()
+    fn serialize_bytes(self, bytes: &[u8]) -> Result<Self::Ok> {
+        self.output.write_all(b"(")?;
+        for &byte in bytes {
+            match byte {
+                0x0c /* Form Feed */ => self.output.write_all(b"\\f")?,
+                0x08 /* Backspace */ => self.output.write_all(b"\\b")?,
+                b'\t' => self.output.write_all(b"\\t")?,
+                b'\r' => self.output.write_all(b"\\r")?,
+                b'\n' => self.output.write_all(b"\\n")?,
+                b')' => self.output.write_all(b"\\)")?,
+                b'(' => self.output.write_all(b"\\(")?,
+                non_graphic if !byte.is_ascii_graphic() => write!(self.output, "\\d{:03o}", non_graphic)?,
+                other => self.output.write_all(&[other])?
+            }
+        }
+        self.output.write_all(b")")?;
+        Ok(())
     }
     fn serialize_none(self) -> Result<Self::Ok> {
         Ok(write!(self.output, "null")?)
@@ -171,6 +180,12 @@ impl<'b, W: Write> Serializer for &'b mut PdfSerializer<W> {
     {
         Ok(write!(self.output, "{}", value)?)
     }
+}
+
+#[derive(Debug)]
+pub struct TupleStructSerializer<'a, W> {
+    serializer: &'a mut PdfSerializer<W>,
+    name: &'static str,
 }
 
 impl<'a, W: Write> ser::SerializeSeq for &'a mut PdfSerializer<W> {
@@ -297,7 +312,12 @@ mod test {
 
     #[test]
     fn test_sequence() {
-        test_serializer(["a", "b"], "[ /a /b ]")
+        test_serializer(["a", "b"], "[ (a) (b) ]")
+    }
+
+    #[test]
+    fn test_escape_sequence() {
+        test_serializer(["\n", "\x00"], "[ (\\n) (\\d000) ]")
     }
 
     #[test]
@@ -305,8 +325,8 @@ mod test {
         #[derive(Serialize)]
         #[serde(rename = "cmd")]
         struct Command(i64, &'static str);
-        test_serializer(Command(10, "ten"), "10 /ten cmd");
-        test_serializer([Command(10, "ten")], "[ 10 /ten cmd ]")
+        test_serializer(Command(10, "ten"), "10 (ten) cmd");
+        test_serializer([Command(10, "ten")], "[ 10 (ten) cmd ]")
     }
 
     #[test]
@@ -318,7 +338,7 @@ mod test {
         };
         test_serializer(
             TStruct { a: 10, b: "ten" },
-            "<< /Type /TStruct\n/a 10\n/b /ten\n>>",
+            "<< /Type /TStruct\n/a 10\n/b (ten)\n>>",
         );
 
         #[derive(Serialize)]
@@ -327,7 +347,7 @@ mod test {
             a: u32,
             b: &'static str,
         };
-        test_serializer(TStruct2 { a: 10, b: "ten" }, "<< /a 10\n/b /ten\n>>")
+        test_serializer(TStruct2 { a: 10, b: "ten" }, "<< /a 10\n/b (ten)\n>>")
     }
 
     #[test]
