@@ -9,7 +9,7 @@ pub struct CompositeFont {
     pub subtype: FontType,
     pub base_font: String,
     pub encoding: String,
-    pub descendant_fonts: [CIDFont; 1],
+    pub descendant_fonts: [IndirectReference<CIDFont>; 1],
     #[skip_if("Option::is_none")]
     pub to_unicode: Option<String>,
 }
