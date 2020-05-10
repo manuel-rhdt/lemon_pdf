@@ -152,19 +152,41 @@ impl PdfFormat for String {
     }
 }
 
+pub trait WriteEscaped {
+    fn write_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()>;
+    fn write_hex_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()>;
+}
+
+impl<W: Write> WriteEscaped for W {
+    fn write_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        for &byte in bytes {
+            match byte {
+                0x0c /* Form Feed */ => self.write_all(b"\\f")?,
+                0x08 /* Backspace */ => self.write_all(b"\\b")?,
+                b'\t' => self.write_all(b"\\t")?,
+                b'\r' => self.write_all(b"\\r")?,
+                b'\n' => self.write_all(b"\\n")?,
+                b')' => self.write_all(b"\\)")?,
+                b'(' => self.write_all(b"\\(")?,
+                non_graphic if !byte.is_ascii_graphic() => write!(self, "\\d{:03o}", non_graphic)?,
+                other => self.write_all(&[other])?
+            }
+        }
+        Ok(())
+    }
+
+    fn write_hex_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        for &byte in bytes {
+            write!(self, "{:X}", byte)?;
+        }
+        Ok(())
+    }
+}
+
 impl<'a> PdfFormat for &'a [u8] {
     fn write(&self, output: &mut Formatter) -> Result<()> {
         write!(output, "(")?;
-        for &byte in self.iter() {
-            let escape = match byte {
-                b'\\' | b'(' | b')' => true,
-                _ => false,
-            };
-            if escape {
-                write!(output, "\\")?;
-            }
-            output.write_all(&[byte])?;
-        }
+        output.write_escaped(self)?;
         write!(output, ")")
     }
 }
