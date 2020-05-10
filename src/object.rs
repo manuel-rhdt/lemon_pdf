@@ -177,7 +177,7 @@ impl<W: Write> WriteEscaped for W {
 
     fn write_hex_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         for &byte in bytes {
-            write!(self, "{:X}", byte)?;
+            write!(self, "{:02X}", byte)?;
         }
         Ok(())
     }
@@ -359,5 +359,17 @@ pub enum Object<T> {
 impl<T> From<IndirectReference<T>> for Object<T> {
     fn from(reference: IndirectReference<T>) -> Self {
         Object::Indirect(reference)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_hex_escape() {
+        let mut outp = vec![];
+        outp.write_hex_escaped(b"\nabc").unwrap();
+        assert_eq!("0A616263", std::str::from_utf8(&outp).unwrap());
     }
 }
