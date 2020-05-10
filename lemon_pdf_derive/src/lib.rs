@@ -1,6 +1,5 @@
-extern crate proc_macro;
-
 use inflector::cases::pascalcase::to_pascal_case;
+use proc_macro2::Span;
 use quote::quote;
 use syn::{
     Attribute, Data, DataEnum, DataStruct, Field, Fields, FieldsNamed, FieldsUnnamed, GenericParam,
@@ -103,14 +102,28 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                 .into_iter()
                 .map(|Variant { ident, fields, .. }| match fields {
                     Fields::Unnamed(FieldsUnnamed { unnamed, .. }) => {
-                        assert_eq!(
-                            unnamed.len(),
-                            1,
-                            "Variant must not contain multiple fields."
-                        );
-                        let Field { ty, .. } = unnamed.into_iter().next().unwrap();
+                        let mut generated_field_names = vec![];
+                        let mut generated_code = vec![];
+                        for (index, Field { ty, .. }) in unnamed.into_iter().enumerate() {
+                            let field_name =
+                                syn::Ident::new(&format!("val{}", index), Span::call_site());
+                            generated_code.push(quote! { <#ty as PdfFormat>::write(#field_name, f)?; write!(f, " ")?; });
+                            generated_field_names.push(field_name);
+                        }
                         quote! {
-                            #name::#ident(val) => <#ty as PdfFormat>::write(val, f)
+                            #name::#ident(#(#generated_field_names),*) => { #(#generated_code)* Ok(()) }
+                        }
+                    }
+                    Fields::Named(FieldsNamed { named, .. }) => {
+                        let mut field_names = vec![];
+                        let mut generated_code = vec![];
+                        for Field { ty, ident, .. } in named.into_iter() {
+                            let field_name = ident.as_ref().unwrap();
+                            generated_code.push(quote! { <#ty as PdfFormat>::write(#field_name, f)?; write!(f, " ")?; });
+                            field_names.push(field_name);
+                        }
+                        quote! {
+                            #name::#ident { #(#field_names),* } => { #(#generated_code)* Ok(()) }
                         }
                     }
                     Fields::Unit => {
@@ -119,11 +132,11 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                             #name::#ident => <&'static str as PdfFormat>::write(&#variant_name, f)
                         }
                     }
-                    _ => panic!("Variant must not contain named fields."),
                 });
             quote! {
                 #impl_line {
                     fn write(&self, f: &mut crate::object::Formatter) -> std::io::Result<()> {
+                        use std::io::Write;
                         match self {
                             #(#variants),*
                         }

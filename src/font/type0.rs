@@ -25,6 +25,12 @@ impl Default for CIDFontType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
+pub enum MetricsEntry {
+    Range { from: u32, to: u32, advance: FontUnit },
+    Consecutive { start: u32, advances: Vec<FontUnit> }
+}
+
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
 #[rename("Font")]
 pub struct CIDFont {
@@ -37,12 +43,12 @@ pub struct CIDFont {
     #[skip_if("Option::is_none")]
     pub dw: Option<FontUnit>,
     #[skip_if("Vec::is_empty")]
-    pub w: Vec<FontUnit>,
+    pub w: Vec<MetricsEntry>,
     #[rename("DW2")]
     #[skip_if("Option::is_none")]
     pub dw2: Option<FontUnit>,
     #[skip_if("Vec::is_empty")]
-    pub w2: Vec<FontUnit>,
+    pub w2: Vec<MetricsEntry>,
     #[rename("CIDToGIDMap")]
     pub cid_to_gid_map: String,
 }
