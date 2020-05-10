@@ -1,4 +1,4 @@
-use super::{descriptor::FontDescriptor, FontUnit, FontType};
+use super::{descriptor::FontDescriptor, FontType, FontUnit};
 
 use crate::object::{IndirectReference, PdfFormat};
 use lemon_pdf_derive::PdfFormat;
@@ -10,7 +10,7 @@ pub struct CompositeFont {
     pub base_font: String,
     pub encoding: String,
     pub descendant_fonts: [CIDFont; 1],
-    pub to_unicode: Option<String>
+    pub to_unicode: Option<String>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PdfFormat)]
@@ -27,8 +27,15 @@ impl Default for CIDFontType {
 
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum MetricsEntry {
-    Range { from: u32, to: u32, advance: FontUnit },
-    Consecutive { start: u32, advances: Vec<FontUnit> }
+    Range {
+        from: u32,
+        to: u32,
+        advance: FontUnit,
+    },
+    Consecutive {
+        start: u32,
+        advances: Vec<FontUnit>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
@@ -53,6 +60,20 @@ pub struct CIDFont {
     pub cid_to_gid_map: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
 #[omit_type(true)]
-pub struct CIDSystemInfo {}
+pub struct CIDSystemInfo {
+    pub registry: Vec<u8>,
+    pub ordering: Vec<u8>,
+    pub supplement: u32,
+}
+
+impl Default for CIDSystemInfo {
+    fn default() -> Self {
+        CIDSystemInfo {
+            registry: b"Adobe".to_vec(),
+            ordering: b"Identity".to_vec(),
+            supplement: 0,
+        }
+    }
+}
