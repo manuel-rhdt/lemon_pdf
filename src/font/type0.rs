@@ -48,4 +48,5 @@ pub struct CIDFont {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
+#[omit_type]
 pub struct CIDSystemInfo {}

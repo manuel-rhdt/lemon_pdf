@@ -27,6 +27,29 @@ use crate::DocumentContext;
 #[derive(Debug, Default, Copy, Clone, PartialEq, PdfFormat)]
 pub struct Pt(pub f64);
 
+pub trait WriteEscaped {
+    fn write_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()>;
+}
+
+impl<W: Write> WriteEscaped for W {
+    fn write_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        for &byte in bytes {
+            match byte {
+                0x0c /* Form Feed */ => self.write_all(b"\\f")?,
+                0x08 /* Backspace */ => self.write_all(b"\\b")?,
+                b'\t' => self.write_all(b"\\t")?,
+                b'\r' => self.write_all(b"\\r")?,
+                b'\n' => self.write_all(b"\\n")?,
+                b')' => self.write_all(b"\\)")?,
+                b'(' => self.write_all(b"\\(")?,
+                non_graphic if !byte.is_ascii_graphic() => write!(self, "\\d{:03o}", non_graphic)?,
+                other => self.write_all(&[other])?
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct PageContext<'page, 'context, 'context_borrow> {
     pub(crate) fonts: HashMap<IndirectReference<Font>, String>,
@@ -189,9 +212,8 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
 
     pub fn draw_cid_glyphs(&mut self, glyphs: impl IntoIterator<Item = u16>) -> Result<()> {
         write!(self.content_stream, "(")?;
-        // TODO: escaping
         for glyph in glyphs {
-            self.content_stream.write_u16::<BigEndian>(glyph)?;
+            self.content_stream.write_escaped(&glyph.to_be_bytes())?;
         }
         write!(self.content_stream, ") Tj ")?;
         Ok(())
