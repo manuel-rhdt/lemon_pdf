@@ -10,6 +10,7 @@ pub struct CompositeFont {
     pub base_font: String,
     pub encoding: String,
     pub descendant_fonts: [CIDFont; 1],
+    #[skip_if("Option::is_none")]
     pub to_unicode: Option<String>,
 }
 
