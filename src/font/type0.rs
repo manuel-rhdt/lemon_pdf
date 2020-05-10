@@ -1,6 +1,6 @@
 use super::{descriptor::FontDescriptor, FontType, FontUnit};
 
-use crate::object::{IndirectReference, PdfFormat};
+use crate::object::{IndirectReference, PdfFormat, Object};
 use lemon_pdf_derive::PdfFormat;
 
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
@@ -45,18 +45,18 @@ pub struct CIDFont {
     pub subtype: CIDFontType,
     pub base_font: String,
     #[rename("CIDSystemInfo")]
-    pub cid_system_info: CIDSystemInfo,
+    pub cid_system_info: Object<CIDSystemInfo>,
     pub font_descriptor: IndirectReference<FontDescriptor>,
     #[rename("DW")]
     #[skip_if("Option::is_none")]
     pub dw: Option<FontUnit>,
-    #[skip_if("Vec::is_empty")]
-    pub w: Vec<MetricsEntry>,
+    #[skip_if("Option::is_none")]
+    pub w: Option<Object<Vec<MetricsEntry>>>,
     #[rename("DW2")]
     #[skip_if("Option::is_none")]
     pub dw2: Option<FontUnit>,
-    #[skip_if("Vec::is_empty")]
-    pub w2: Vec<MetricsEntry>,
+    #[skip_if("Option::is_none")]
+    pub w2: Option<Object<Vec<MetricsEntry>>>,
     #[rename("CIDToGIDMap")]
     pub cid_to_gid_map: String,
 }

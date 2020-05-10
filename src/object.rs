@@ -356,6 +356,12 @@ pub enum Object<T> {
     Indirect(IndirectReference<T>),
 }
 
+impl<T: Default> Default for Object<T> {
+    fn default() -> Self {
+        Object::Direct(Default::default())
+    }
+}
+
 impl<T> From<IndirectReference<T>> for Object<T> {
     fn from(reference: IndirectReference<T>) -> Self {
         Object::Indirect(reference)
