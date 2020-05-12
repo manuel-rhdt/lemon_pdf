@@ -36,7 +36,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
     let impl_line = if generics.is_empty() {
         quote! { impl lemon_pdf::PdfFormat for #name }
     } else {
-        quote! { impl<#(#generics: PdfFormat),*> lemon_pdf::PdfFormat for #name<#(#generics),*> }
+        quote! { impl<#(#generics: lemon_pdf::PdfFormat),*> lemon_pdf::PdfFormat for #name<#(#generics),*> }
     };
 
     match &ast.data {
@@ -107,7 +107,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                         for (index, Field { ty, .. }) in unnamed.into_iter().enumerate() {
                             let field_name =
                                 syn::Ident::new(&format!("val{}", index), Span::call_site());
-                            generated_code.push(quote! { <#ty as PdfFormat>::write(#field_name, f)?; write!(f, " ")?; });
+                            generated_code.push(quote! { <#ty as lemon_pdf::PdfFormat>::write(#field_name, f)?; write!(f, " ")?; });
                             generated_field_names.push(field_name);
                         }
                         quote! {
@@ -119,7 +119,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                         let mut generated_code = vec![];
                         for Field { ty, ident, .. } in named.into_iter() {
                             let field_name = ident.as_ref().unwrap();
-                            generated_code.push(quote! { <#ty as PdfFormat>::write(#field_name, f)?; write!(f, " ")?; });
+                            generated_code.push(quote! { <#ty as lemon_pdf::PdfFormat>::write(#field_name, f)?; write!(f, " ")?; });
                             field_names.push(field_name);
                         }
                         quote! {
@@ -129,7 +129,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                     Fields::Unit => {
                         let variant_name = LitStr::new(&ident.to_string(), ident.span());
                         quote! {
-                            #name::#ident => <&'static str as PdfFormat>::write(&#variant_name, f)
+                            #name::#ident => <&'static str as lemon_pdf::PdfFormat>::write(&#variant_name, f)
                         }
                     }
                 });
