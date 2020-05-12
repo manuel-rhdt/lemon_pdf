@@ -59,6 +59,7 @@ pub struct CIDFont {
     #[skip_if("Option::is_none")]
     pub w2: Option<Object<Vec<MetricsEntry>>>,
     #[rename("CIDToGIDMap")]
+    #[skip_if("String::is_empty")]
     pub cid_to_gid_map: String,
 }
 
