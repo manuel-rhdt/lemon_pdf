@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::io::{Result, Write};
 
 use lemon_pdf_derive::PdfFormat;
+use crate as lemon_pdf;
 
 use crate::font::Font;
 use crate::object::{Formatter, IndirectReference, PdfFormat, WriteEscaped};

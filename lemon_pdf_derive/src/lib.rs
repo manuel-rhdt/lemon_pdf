@@ -34,9 +34,9 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
         })
         .collect();
     let impl_line = if generics.is_empty() {
-        quote! { impl PdfFormat for #name }
+        quote! { impl lemon_pdf::PdfFormat for #name }
     } else {
-        quote! { impl<#(#generics: PdfFormat),*> PdfFormat for #name<#(#generics),*> }
+        quote! { impl<#(#generics: PdfFormat),*> lemon_pdf::PdfFormat for #name<#(#generics),*> }
     };
 
     match &ast.data {
@@ -76,7 +76,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
 
             quote! {
                 #impl_line {
-                    fn write(&self, f: &mut crate::object::Formatter) -> std::io::Result<()> {
+                    fn write(&self, f: &mut lemon_pdf::object::Formatter) -> std::io::Result<()> {
                         let mut f = f.format_dictionary();
                         #type_key;
                         #(#key_values)*
@@ -91,7 +91,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
         }) if unnamed.len() == 1 => {
             quote! {
                 #impl_line {
-                    fn write(&self, f: &mut crate::object::Formatter) -> std::io::Result<()> {
+                    fn write(&self, f: &mut lemon_pdf::object::Formatter) -> std::io::Result<()> {
                         self.0.write(f)
                     }
                 }
@@ -135,7 +135,7 @@ fn impl_pdf_format_derive(ast: &syn::DeriveInput) -> proc_macro2::TokenStream {
                 });
             quote! {
                 #impl_line {
-                    fn write(&self, f: &mut crate::object::Formatter) -> std::io::Result<()> {
+                    fn write(&self, f: &mut lemon_pdf::object::Formatter) -> std::io::Result<()> {
                         use std::io::Write;
                         match self {
                             #(#variants),*

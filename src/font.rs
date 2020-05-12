@@ -13,6 +13,7 @@
 //    limitations under the License.
 
 use lemon_pdf_derive::PdfFormat;
+use crate as lemon_pdf;
 
 use crate::object::PdfFormat;
 

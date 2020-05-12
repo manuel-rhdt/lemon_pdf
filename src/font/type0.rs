@@ -2,6 +2,7 @@ use super::{descriptor::FontDescriptor, FontType, FontUnit};
 
 use crate::object::{IndirectReference, PdfFormat, Object};
 use lemon_pdf_derive::PdfFormat;
+use crate as lemon_pdf;
 
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
 #[rename("Font")]

@@ -15,6 +15,7 @@
 use std::io::{Result, Write};
 use std::{fmt::Debug, hash::Hash, marker::PhantomData};
 
+use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat;
 
 use crate::array::Array;

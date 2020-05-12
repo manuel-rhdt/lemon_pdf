@@ -1,5 +1,6 @@
 use crate::object::{Object, PdfFormat, Value};
 use lemon_pdf_derive::PdfFormat;
+use crate as lemon_pdf;
 
 use std::convert::TryFrom;
 

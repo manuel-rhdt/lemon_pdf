@@ -62,6 +62,8 @@ pub struct CharMetric {
 // }
 include!(concat!(env!("OUT_DIR"), "/base_14_fonts.rs"));
 
+use crate as lemon_pdf;
+
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
 #[rename("Font")]
 pub struct SimpleFont {

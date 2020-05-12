@@ -17,6 +17,7 @@ use std::f64::consts::SQRT_2;
 use std::io::Result;
 
 use lemon_pdf_derive::PdfFormat;
+use crate as lemon_pdf;
 
 use crate::array::Array;
 use crate::content::PageContext;

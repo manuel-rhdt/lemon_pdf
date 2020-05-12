@@ -33,6 +33,7 @@ mod deserializer;
 pub use crate::document::*;
 pub use self::pagetree::Page;
 pub use self::content::Pt;
+pub use self::object::PdfFormat;
 
 #[cfg(test)]
 mod tests {

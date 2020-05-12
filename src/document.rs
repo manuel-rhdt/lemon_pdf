@@ -19,6 +19,7 @@ use std::io::Error;
 use serde::Serialize;
 
 use lemon_pdf_derive::PdfFormat;
+use crate as lemon_pdf;
 
 use crate::crossref::CrossRef;
 use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference};

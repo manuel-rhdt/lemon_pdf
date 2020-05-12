@@ -1,4 +1,5 @@
 use lemon_pdf_derive::PdfFormat;
+use crate as lemon_pdf;
 
 use super::FontUnit;
 use crate::object::{PdfFormat, IndirectReference};
