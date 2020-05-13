@@ -1,8 +1,9 @@
 use super::{descriptor::FontDescriptor, FontType, FontUnit};
 
-use crate::object::{IndirectReference, PdfFormat, Object};
-use lemon_pdf_derive::PdfFormat;
 use crate as lemon_pdf;
+use crate::object::{IndirectReference, Object};
+use crate::stream::Stream;
+use lemon_pdf_derive::PdfFormat;
 
 #[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
 #[rename("Font")]
@@ -12,7 +13,7 @@ pub struct CompositeFont {
     pub encoding: String,
     pub descendant_fonts: [IndirectReference<CIDFont>; 1],
     #[skip_if("Option::is_none")]
-    pub to_unicode: Option<String>,
+    pub to_unicode: Option<IndirectReference<Stream>>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, PdfFormat)]
