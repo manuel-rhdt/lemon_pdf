@@ -9,7 +9,7 @@ use super::{
     encoding, FontType, FontUnit,
 };
 use crate::document::DocumentContext;
-use crate::object::{IndirectReference, PdfFormat};
+use crate::object::{IndirectReference};
 
 #[derive(Debug, Copy, Clone)]
 pub struct BuiltInFontMetrics {

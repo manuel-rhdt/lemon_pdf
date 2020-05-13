@@ -19,7 +19,7 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression;
 
 use crate::dictionary::Dictionary;
-use crate::object::{Formatter, Object, PdfFormat, Value};
+use crate::object::{Formatter, PdfFormat, Value};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum StreamFilter {

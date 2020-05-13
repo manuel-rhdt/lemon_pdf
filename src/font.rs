@@ -12,10 +12,8 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use lemon_pdf_derive::PdfFormat;
 use crate as lemon_pdf;
-
-use crate::object::PdfFormat;
+use lemon_pdf_derive::PdfFormat;
 
 pub mod builtin;
 pub mod descriptor;
@@ -25,7 +23,7 @@ pub mod type0;
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum Font {
     Simple(builtin::SimpleFont),
-    Composite(type0::CompositeFont)
+    Composite(type0::CompositeFont),
 }
 
 /// A postscript font unit (1/1000 of an EM)

@@ -16,14 +16,14 @@ use std::collections::HashMap;
 use std::f64::consts::SQRT_2;
 use std::io::Result;
 
-use lemon_pdf_derive::PdfFormat;
 use crate as lemon_pdf;
+use lemon_pdf_derive::PdfFormat;
 
 use crate::array::Array;
 use crate::content::PageContext;
 use crate::document::DocumentContext;
 use crate::font::Font;
-use crate::object::{IndirectReference, Object, PdfFormat, Value};
+use crate::object::{IndirectReference, Object, Value};
 use crate::stream::{Stream, StreamEncoder, StreamFilter};
 use crate::Pt;
 
@@ -115,7 +115,7 @@ impl Page {
             resources: None,
             media_box: MediaBox::paper_din_a(4).as_array(),
             parent: None,
-            contents: Vec::new()
+            contents: Vec::new(),
         }
     }
 
