@@ -55,7 +55,7 @@ impl Trailer {
         };
         let mut formatter = formatter
             .format_dictionary()
-            .key_value(&"Size", &context.crossref.len())
+            .key_value(&"Size", &context.crossref.len() + 1)
             .key_value(&"Root", &self.document_catalog)
             .key_value(&"ID", &[digest.clone(), digest]);
 
