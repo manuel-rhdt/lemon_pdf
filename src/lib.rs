@@ -13,27 +13,27 @@
 //    limitations under the License.
 #![deny(missing_debug_implementations)]
 
-
 #[macro_use]
 extern crate derive_more;
 
 pub mod array;
-mod document;
 pub mod content;
 mod crossref;
+mod deserializer;
 pub mod dictionary;
+mod document;
 pub mod font;
 pub mod object;
 pub mod pagetree;
-pub mod stream;
-mod trailer;
 mod serializer;
-mod deserializer;
+pub mod stream;
+pub mod structure_tree;
+mod trailer;
 
-pub use crate::document::*;
-pub use self::pagetree::Page;
 pub use self::content::Pt;
 pub use self::object::PdfFormat;
+pub use self::pagetree::Page;
+pub use crate::document::*;
 
 #[cfg(test)]
 mod tests {
