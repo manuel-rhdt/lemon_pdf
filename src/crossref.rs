@@ -40,7 +40,7 @@ impl CrossRef {
 impl PdfFormat for CrossRef {
     fn write(&self, f: &mut Formatter) -> Result<()> {
         writeln!(f, "xref")?;
-        writeln!(f, "1 {}", self.entries.len())?;
+        writeln!(f, "1 {}", self.entries.len()+1)?;
         for entry in &self.entries {
             write!(f, "{:0>10} {:0>5} n\r\n", entry.0, entry.1)?;
         }
