@@ -95,11 +95,11 @@ impl From<StreamEncoder> for Value {
 #[derive(Debug)]
 pub struct Stream {
     // a Vec of bytes that can be decoded using the filter
-    bytes: Vec<u8>,
+    pub bytes: Vec<u8>,
     // A filter that specifies how the bytes are to be decoded. A value of None
     // means that the bytes are not encoded in any way.
-    filter: Option<StreamFilter>,
-    additional_keys: Dictionary,
+    pub filter: Option<StreamFilter>,
+    pub additional_keys: Dictionary,
 }
 
 impl Stream {
