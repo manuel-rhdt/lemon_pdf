@@ -25,11 +25,11 @@ impl CrossRef {
     /// Add a `PdfObject` to the `CrossRef` and get its object number.
     pub fn add_entry(&mut self, offset: u64, generation: u32) -> u32 {
         self.entries.push((offset, generation));
-        self.len() - 1
+        self.len()
     }
 
-    pub fn get_entry_mut(&mut self, num: usize) -> &mut (u64, u32) {
-        &mut self.entries[num]
+    pub fn get_entry_mut(&mut self, num: u32) -> &mut (u64, u32) {
+        &mut self.entries[(num-1) as usize]
     }
 
     pub fn len(&self) -> u32 {
@@ -40,7 +40,7 @@ impl CrossRef {
 impl PdfFormat for CrossRef {
     fn write(&self, f: &mut Formatter) -> Result<()> {
         writeln!(f, "xref")?;
-        writeln!(f, "0 {}", self.entries.len())?;
+        writeln!(f, "1 {}", self.entries.len())?;
         for entry in &self.entries {
             write!(f, "{:0>10} {:0>5} n\r\n", entry.0, entry.1)?;
         }

@@ -22,10 +22,10 @@ use lemon_pdf_derive::PdfFormat;
 use crate as lemon_pdf;
 
 use crate::crossref::CrossRef;
-use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference};
+use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference, Object};
 use crate::pagetree::{Page, Pages};
 use crate::serializer::PdfSerializer;
-use crate::trailer::Trailer;
+use crate::{structure_tree::StructTreeRoot, trailer::Trailer};
 use log::error;
 
 pub type DocumentInfo = HashMap<String, Vec<u8>>;
@@ -96,6 +96,7 @@ where
 #[rename("Catalog")]
 pub(crate) struct DocumentCatalog {
     pages: Option<IndirectReference<Pages>>,
+    struct_tree_root: Option<Object<StructTreeRoot>>
 }
 
 pub struct DocumentContext<'a> {
@@ -166,7 +167,7 @@ impl<'a> DocumentContext<'a> {
     ) -> Result<(), Error> {
         self.dangling_references.remove(&reference.raw());
         // update placeholder entry in crossref
-        self.crossref.get_entry_mut(reference.number() as usize).0 = self.output.offset();
+        self.crossref.get_entry_mut(reference.number() as u32).0 = self.output.offset();
 
         let mut serializer = PdfSerializer {
             output: &mut self.output,
@@ -208,7 +209,7 @@ impl<'a> DocumentContext<'a> {
         reference: RawIndirectReference,
     ) -> Result<(), Error> {
         // update placeholder entry in crossref
-        self.crossref.get_entry_mut(reference.0 as usize).0 = self.output.offset();
+        self.crossref.get_entry_mut(reference.0 as u32).0 = self.output.offset();
         writeln!(self.output, "{} {} obj", reference.0, reference.1)?;
         let mut formatter = Formatter {
             writer: &mut self.output,
