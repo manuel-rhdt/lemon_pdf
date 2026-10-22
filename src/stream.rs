@@ -12,7 +12,7 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::io::{Cursor, Result, Write};
+use std::io::{BufWriter, Cursor, Result, Write};
 use std::ops::Deref;
 
 use flate2::write::ZlibEncoder;
@@ -37,7 +37,7 @@ impl PdfFormat for StreamFilter {
 #[derive(Debug)]
 enum StreamEncoderType {
     Identity(Cursor<Vec<u8>>),
-    Deflate(ZlibEncoder<Cursor<Vec<u8>>>),
+    Deflate(BufWriter<ZlibEncoder<Cursor<Vec<u8>>>>),
 }
 
 /// A convenience type to create PDF streams.
@@ -50,9 +50,9 @@ impl StreamEncoder {
     pub fn new(filter: Option<StreamFilter>) -> Self {
         let enc_type = match filter {
             None => StreamEncoderType::Identity(Cursor::new(Vec::new())),
-            Some(StreamFilter::Deflate) => StreamEncoderType::Deflate(ZlibEncoder::new(
-                Cursor::new(Vec::new()),
-                Compression::default(),
+            Some(StreamFilter::Deflate) => StreamEncoderType::Deflate(BufWriter::with_capacity(
+                32 * 1024,
+                ZlibEncoder::new(Cursor::new(Vec::new()), Compression::default()),
             )),
         };
         StreamEncoder { enc_type }
@@ -62,7 +62,7 @@ impl StreamEncoder {
         let (bytes, filter) = match self.enc_type {
             StreamEncoderType::Identity(enc) => (enc.into_inner(), None),
             StreamEncoderType::Deflate(enc) => (
-                enc.finish().unwrap().into_inner(),
+                enc.into_inner().unwrap().finish().unwrap().into_inner(),
                 Some(StreamFilter::Deflate),
             ),
         };
