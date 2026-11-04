@@ -46,6 +46,38 @@ pub struct Trailer {
 }
 
 impl Trailer {
+    /// Writes the cross-reference information as a cross-reference stream (PDF 1.5).
+    pub(crate) fn write_xref_stream(&mut self, context: &mut DocumentContext) -> Result<()> {
+        use crate::stream::{Stream, StreamFilter};
+        use flate2::{write::ZlibEncoder, Compression};
+
+        let offset = context.current_offset();
+        // the xref stream is an object itself
+        let num = context.crossref.add_entry(offset, 0);
+        let (data, width) = context.crossref.stream_data();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&data)?;
+        let mut stream = Stream::with_bytes(encoder.finish()?, Some(StreamFilter::Deflate));
+
+        let digest = get_digest(offset);
+        stream.add_key_value("Type".to_owned(), Box::new("XRef"));
+        stream.add_key_value("Size".to_owned(), Box::new(i64::from(num) + 1));
+        stream.add_key_value("W".to_owned(), Box::new([1i64, width as i64, 2]));
+        stream.add_key_value("Root".to_owned(), Box::new(self.document_catalog));
+        if let Some(info) = self.document_info {
+            stream.add_key_value("Info".to_owned(), Box::new(info));
+        }
+        stream.add_key_value("ID".to_owned(), Box::new([digest.clone(), digest]));
+
+        writeln!(context.output, "{} 0 obj", num)?;
+        let mut formatter = Formatter {
+            writer: &mut context.output,
+        };
+        stream.write(&mut formatter)?;
+        write!(context.output, "\nendobj\n")?;
+        write!(context.output, "startxref\n{}\n%%EOF\n", offset)
+    }
+
     pub(crate) fn write(&mut self, context: &mut DocumentContext) -> Result<()> {
         writeln!(context.output, "trailer")?;
         let digest = get_digest(context.current_offset());

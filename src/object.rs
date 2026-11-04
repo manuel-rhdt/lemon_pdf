@@ -120,6 +120,11 @@ impl<'a, 'b> ArrayFormatter<'a, 'b> {
 
 pub trait PdfFormat: std::fmt::Debug {
     fn write(&self, output: &mut Formatter) -> Result<()>;
+
+    /// Whether this object is a stream. Streams can never be stored inside object streams.
+    fn is_stream(&self) -> bool {
+        false
+    }
 }
 
 impl<'a> PdfFormat for &'a str {
@@ -135,6 +140,10 @@ where
 {
     fn write(&self, output: &mut Formatter) -> Result<()> {
         (*self).write(output)
+    }
+
+    fn is_stream(&self) -> bool {
+        (*self).is_stream()
     }
 }
 
@@ -198,15 +207,26 @@ impl PdfFormat for Vec<u8> {
     }
 }
 
+/// Writes a real number with at most two decimals, without trailing zeros
+/// (`20.00` becomes `20`, `-41.50` becomes `-41.5`) to keep content streams small.
+fn write_trimmed_real(output: &mut Formatter, value: f64) -> Result<()> {
+    let formatted = format!("{:.2}", value);
+    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
+    match trimmed {
+        "" | "-" | "-0" => write!(output, "0"),
+        other => write!(output, "{}", other),
+    }
+}
+
 impl PdfFormat for f32 {
     fn write(&self, output: &mut Formatter) -> Result<()> {
-        write!(output, "{:.2}", self)
+        write_trimmed_real(output, *self as f64)
     }
 }
 
 impl PdfFormat for f64 {
     fn write(&self, output: &mut Formatter) -> Result<()> {
-        write!(output, "{:.2}", self)
+        write_trimmed_real(output, *self)
     }
 }
 

@@ -133,4 +133,8 @@ impl PdfFormat for Stream {
         f.write_all(&self.bytes)?;
         write!(f, "\nendstream")
     }
+
+    fn is_stream(&self) -> bool {
+        true
+    }
 }

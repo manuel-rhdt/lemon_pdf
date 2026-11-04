@@ -19,6 +19,8 @@ use crate::object::{Formatter, PdfFormat};
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CrossRef {
     entries: Vec<(u64, u32)>,
+    /// Objects stored in object streams: object number -> (object stream number, index).
+    compressed: std::collections::BTreeMap<u32, (u32, u32)>,
 }
 
 impl CrossRef {
@@ -30,6 +32,37 @@ impl CrossRef {
 
     pub fn get_entry_mut(&mut self, num: u32) -> &mut (u64, u32) {
         &mut self.entries[(num-1) as usize]
+    }
+
+    pub fn set_compressed(&mut self, num: u32, stream: u32, index: u32) {
+        self.compressed.insert(num, (stream, index));
+    }
+
+    /// Writes a cross-reference stream's data: one `[1, offset_width, 2]` row per object
+    /// (including object 0). Returns the data and the width of the second field.
+    pub fn stream_data(&self) -> (Vec<u8>, usize) {
+        let max = self
+            .entries
+            .iter()
+            .map(|e| e.0)
+            .chain(self.compressed.values().map(|v| v.0 as u64))
+            .max()
+            .unwrap_or(0);
+        let width = (1..=8usize).find(|w| max >> (8 * w) == 0).unwrap_or(8);
+        let mut data = Vec::with_capacity((self.entries.len() + 1) * (width + 3));
+        let mut row = |kind: u8, a: u64, b: u16| {
+            data.push(kind);
+            data.extend_from_slice(&a.to_be_bytes()[8 - width..]);
+            data.extend_from_slice(&b.to_be_bytes());
+        };
+        row(0, 0, 65535);
+        for (i, entry) in self.entries.iter().enumerate() {
+            match self.compressed.get(&(i as u32 + 1)) {
+                Some(&(stream, index)) => row(2, stream as u64, index as u16),
+                None => row(1, entry.0, entry.1 as u16),
+            }
+        }
+        (data, width)
     }
 
     pub fn len(&self) -> u32 {

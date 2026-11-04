@@ -16,6 +16,7 @@
 #[macro_use]
 extern crate derive_more;
 
+pub mod annotation;
 pub mod array;
 pub mod content;
 mod crossref;
@@ -37,8 +38,54 @@ pub use crate::document::*;
 
 #[cfg(test)]
 mod tests {
+    use crate::annotation::{Annotation, Destination, GoToAction, LinkAction, LinkAnnotation, UriAction};
+    use crate::object::PdfFormat;
+    use crate::pagetree::Page;
+    use crate::Pt;
+
     #[test]
     fn it_works() {
         assert_eq!(2 + 2, 4);
+    }
+
+    #[test]
+    fn link_annotation_is_written() {
+        let mut page = Page::new();
+        let link = Annotation::Link(LinkAnnotation {
+            rect: [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
+            action: LinkAction::Uri(UriAction {
+                uri: "https://example.com".to_owned(),
+            }),
+        });
+        let mut buffer = Vec::new();
+        let mut formatter = crate::object::Formatter {
+            writer: &mut buffer,
+        };
+        link.write(&mut formatter).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+        assert!(output.contains("/Subtype /Link"), "output was: {}", output);
+        assert!(output.contains("/URI (https://example.com)"), "output was: {}", output);
+        assert!(output.contains("/Rect"), "output was: {}", output);
+    }
+
+    #[test]
+    fn goto_link_annotation_is_written() {
+        let link = Annotation::Link(LinkAnnotation {
+            rect: [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
+            action: LinkAction::GoTo(GoToAction {
+                destination: Destination {
+                    page_index: 2,
+                    point: (Pt(10.0), Pt(20.0)),
+                },
+            }),
+        });
+        let mut buffer = Vec::new();
+        let mut formatter = crate::object::Formatter {
+            writer: &mut buffer,
+        };
+        link.write(&mut formatter).unwrap();
+        let output = String::from_utf8(buffer).unwrap();
+        assert!(output.contains("/S /GoTo"), "output was: {}", output);
+        assert!(output.contains("/D [ 2 /XYZ 10 20 null ]"), "output was: {}", output);
     }
 }

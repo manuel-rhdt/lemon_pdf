@@ -109,7 +109,17 @@ pub struct DocumentContext<'a> {
     /// entries will be created.
     pub document_info: DocumentInfo,
     dangling_references: HashSet<RawIndirectReference>,
+    /// Store small non-stream objects in compressed object streams and write a
+    /// cross-reference stream instead of a cross-reference table. Enabled by default.
+    pub object_streams: bool,
+    /// Objects (number, serialized bytes) waiting to be written into an object stream.
+    pending_objects: Vec<(u32, Vec<u8>)>,
+    pending_bytes: usize,
 }
+
+/// Flush an object stream once it holds this many objects or bytes.
+const OBJECT_STREAM_MAX_OBJECTS: usize = 200;
+const OBJECT_STREAM_MAX_BYTES: usize = 256 * 1024;
 
 impl<'a> std::fmt::Debug for DocumentContext<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -133,6 +143,9 @@ impl<'a> DocumentContext<'a> {
             page_tree: Some(Pages::new()),
             document_info: Default::default(),
             dangling_references: Default::default(),
+            object_streams: true,
+            pending_objects: Vec::new(),
+            pending_bytes: 0,
         };
         context.start_pdf()?;
         Ok(context)
@@ -208,14 +221,60 @@ impl<'a> DocumentContext<'a> {
         object: impl PdfFormat,
         reference: RawIndirectReference,
     ) -> Result<(), Error> {
+        let mut bytes = Vec::new();
+        object.write(&mut Formatter { writer: &mut bytes })?;
+
+        let looks_like_stream = bytes.windows(8).any(|w| w == b"\nstream\n");
+        if self.object_streams && reference.1 == 0 && !object.is_stream() && !looks_like_stream {
+            self.pending_bytes += bytes.len();
+            self.pending_objects.push((reference.0 as u32, bytes));
+            if self.pending_objects.len() >= OBJECT_STREAM_MAX_OBJECTS
+                || self.pending_bytes >= OBJECT_STREAM_MAX_BYTES
+            {
+                self.flush_object_stream()?;
+            }
+            return Ok(());
+        }
+
         // update placeholder entry in crossref
         self.crossref.get_entry_mut(reference.0 as u32).0 = self.output.offset();
         writeln!(self.output, "{} {} obj", reference.0, reference.1)?;
-        let mut formatter = Formatter {
-            writer: &mut self.output,
-        };
-        object.write(&mut formatter)?;
+        self.output.write_all(&bytes)?;
         write!(self.output, "\nendobj\n")?;
+        Ok(())
+    }
+
+    /// Writes all pending objects into one compressed object stream.
+    fn flush_object_stream(&mut self) -> Result<(), Error> {
+        use crate::stream::{Stream, StreamFilter};
+        use flate2::{write::ZlibEncoder, Compression};
+
+        if self.pending_objects.is_empty() {
+            return Ok(());
+        }
+        let objects = std::mem::take(&mut self.pending_objects);
+        self.pending_bytes = 0;
+
+        let mut header = String::new();
+        let mut body = Vec::new();
+        for (num, bytes) in &objects {
+            header.push_str(&format!("{} {} ", num, body.len()));
+            body.extend_from_slice(bytes);
+            body.push(b'\n');
+        }
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(header.as_bytes())?;
+        encoder.write_all(&body)?;
+        let mut stream = Stream::with_bytes(encoder.finish()?, Some(StreamFilter::Deflate));
+        stream.add_key_value("Type".to_owned(), Box::new("ObjStm"));
+        stream.add_key_value("N".to_owned(), Box::new(objects.len() as i64));
+        stream.add_key_value("First".to_owned(), Box::new(header.len() as i64));
+
+        let stream_ref = self.write_object(stream)?;
+        for (index, (num, _)) in objects.iter().enumerate() {
+            self.crossref
+                .set_compressed(*num, stream_ref.number() as u32, index as u32);
+        }
         Ok(())
     }
 
@@ -270,6 +329,18 @@ impl<'a> DocumentContext<'a> {
         } else {
             None
         };
+
+        self.flush_object_stream()?;
+
+        if self.object_streams {
+            let mut trailer = Trailer {
+                crossref_offset: 0,
+                document_catalog,
+                document_info,
+            };
+            trailer.write_xref_stream(&mut self)?;
+            return self.output.flush();
+        }
 
         let offset = self.output.offset();
         let mut formatter = Formatter {

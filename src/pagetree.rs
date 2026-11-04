@@ -19,6 +19,7 @@ use std::io::Result;
 use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat;
 
+use crate::annotation::Annotation;
 use crate::array::Array;
 use crate::content::PageContext;
 use crate::document::DocumentContext;
@@ -105,6 +106,10 @@ pub struct ResourceDictionary {
 pub struct Page {
     pub resources: Option<ResourceDictionary>,
     pub media_box: [Pt; 4],
+    /// The annotations of the page. Only emitted if the vector is not empty.
+    #[rename("Annots")]
+    #[skip_if(Vec::is_empty)]
+    pub annotations: Vec<Object<Annotation>>,
     #[skip_if("Option::is_none")]
     pub parent: Option<IndirectReference<Pages>>,
     pub contents: Vec<IndirectReference<Stream>>,
@@ -115,12 +120,21 @@ impl Page {
             resources: None,
             media_box: MediaBox::paper_din_a(4).as_array(),
             parent: None,
+            annotations: Vec::new(),
             contents: Vec::new(),
         }
     }
 
     pub fn set_media_box(&mut self, media_box: MediaBox) {
         self.media_box = media_box.as_array()
+    }
+
+    /// Adds an annotation to the page. The annotation is written as an indirect object when the
+    /// page is added to the document.
+    pub fn add_annotation(&mut self, context: &mut DocumentContext, annotation: Annotation) -> Result<()> {
+        let annotation = context.write_object(annotation)?;
+        self.annotations.push(annotation.into());
+        Ok(())
     }
 
     fn get_context<'context, 'borrow>(
