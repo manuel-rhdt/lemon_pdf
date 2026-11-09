@@ -133,3 +133,59 @@ impl BuiltInFont {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn units(values: [f64; 4]) -> [FontUnit; 4] {
+        [FontUnit(values[0]), FontUnit(values[1]), FontUnit(values[2]), FontUnit(values[3])]
+    }
+
+    #[test]
+    fn helvetica_metrics_match_the_afm_file() {
+        let metrics = BuiltInFont::Helvetica.metrics();
+        assert_eq!(metrics.font_name, "Helvetica");
+        assert_eq!(metrics.family_name, "Helvetica");
+        // `FontBBox -166 -225 1000 931` is llx lly urx ury
+        assert_eq!(metrics.font_bbox, units([-166.0, -225.0, 1000.0, 931.0]));
+        assert_eq!(metrics.cap_height, FontUnit(718.0));
+        assert_eq!(metrics.descender, FontUnit(-207.0));
+
+        // `C 65 ; WX 667 ; N A ; B 14 0 654 718 ;`
+        let index = (metrics.unicode_mapping)('A').unwrap();
+        let a = metrics.char_metrics[index];
+        assert_eq!(a.name, "A");
+        assert_eq!(a.character_code, 65);
+        assert_eq!(a.advance_width, FontUnit(667.0));
+        assert_eq!(a.bbox, units([14.0, 0.0, 654.0, 718.0]));
+    }
+
+    #[test]
+    fn all_bounding_boxes_are_ordered() {
+        let fonts = [
+            BuiltInFont::Courier,
+            BuiltInFont::CourierBold,
+            BuiltInFont::CourierBoldOblique,
+            BuiltInFont::CourierOblique,
+            BuiltInFont::Helvetica,
+            BuiltInFont::HelveticaBold,
+            BuiltInFont::HelveticaBoldOblique,
+            BuiltInFont::HelveticaOblique,
+            BuiltInFont::Symbol,
+            BuiltInFont::TimesBold,
+            BuiltInFont::TimesBoldItalic,
+            BuiltInFont::TimesItalic,
+            BuiltInFont::TimesRoman,
+            BuiltInFont::ZapfDingbats,
+        ];
+        for font in &fonts {
+            let metrics = font.metrics();
+            let ordered = |[llx, lly, urx, ury]: [FontUnit; 4]| llx.0 <= urx.0 && lly.0 <= ury.0;
+            assert!(ordered(metrics.font_bbox), "{:?}: {:?}", font, metrics.font_bbox);
+            for c in metrics.char_metrics {
+                assert!(ordered(c.bbox), "{:?} {}: {:?}", font, c.name, c.bbox);
+            }
+        }
+    }
+}

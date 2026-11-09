@@ -14,9 +14,7 @@ log = "0.4.8"
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
-afm = "0.1.2"
 glob = "0.3.0"
-pom = "1"
 quote = "1"
 proc-macro2 = "1"
 csv = "1"
