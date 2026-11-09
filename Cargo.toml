@@ -26,3 +26,4 @@ Inflector = "0.11.4"
 
 [dev-dependencies]
 encoding_rs = "0.8.22"
+lopdf = "0.47"

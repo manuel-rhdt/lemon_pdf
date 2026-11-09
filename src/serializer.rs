@@ -55,13 +55,13 @@ impl<'b, W: Write> Serializer for &'b mut PdfSerializer<W> {
         Ok(write!(self.output, "{}", v)?)
     }
     fn serialize_f32(self, v: f32) -> Result<Self::Ok> {
-        Ok(write!(self.output, "{}", v)?)
+        self.serialize_f64(f64::from(v))
     }
     fn serialize_f64(self, v: f64) -> Result<Self::Ok> {
-        Ok(write!(self.output, "{}", v)?)
+        Ok(write!(self.output, "{}", crate::object::sanitize_real(v))?)
     }
     fn serialize_char(self, v: char) -> Result<Self::Ok> {
-        Ok(write!(self.output, "({})", v)?)
+        self.serialize_str(v.encode_utf8(&mut [0; 4]))
     }
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
         self.serialize_bytes(v.as_bytes())
@@ -119,12 +119,13 @@ impl<'b, W: Write> Serializer for &'b mut PdfSerializer<W> {
         _name: &'static str,
         _variant_index: u32,
         _variant: &'static str,
-        _value: &T,
+        value: &T,
     ) -> Result<Self::Ok>
     where
         T: serde::Serialize,
     {
-        todo!()
+        // like `#[derive(PdfFormat)]`, a newtype variant is written as its value
+        value.serialize(self)
     }
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq> {
         write!(self.output, "[ ")?;
@@ -168,12 +169,15 @@ impl<'b, W: Write> Serializer for &'b mut PdfSerializer<W> {
     }
     fn serialize_struct_variant(
         self,
-        _name: &'static str,
+        name: &'static str,
         _variant_index: u32,
-        _variant: &'static str,
+        variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        todo!()
+        Err(Error::Custom(format!(
+            "struct variant {}::{} cannot be serialized to PDF",
+            name, variant
+        )))
     }
     fn collect_str<T: ?Sized>(self, value: &T) -> Result<Self::Ok>
     where
@@ -286,14 +290,15 @@ impl<'a, W: Write> ser::SerializeStruct for &'a mut PdfSerializer<W> {
 impl<'a, W: Write> ser::SerializeStructVariant for &'a mut PdfSerializer<W> {
     type Ok = ();
     type Error = Error;
+    // unreachable: `serialize_struct_variant` always returns an error
     fn serialize_field<T: ?Sized>(&mut self, _key: &'static str, _value: &T) -> Result<()>
     where
         T: serde::Serialize,
     {
-        todo!()
+        Err(Error::Custom("struct variants cannot be serialized to PDF".to_owned()))
     }
     fn end(self) -> Result<Self::Ok> {
-        todo!()
+        Err(Error::Custom("struct variants cannot be serialized to PDF".to_owned()))
     }
 }
 
@@ -319,6 +324,22 @@ mod test {
     #[test]
     fn test_escape_sequence() {
         test_serializer(["\n", "\x00"], "[ (\\n) (\\000) ]")
+    }
+
+    #[test]
+    fn test_escape_delimiters() {
+        test_serializer("a(b)c\\", "(a\\(b\\)c\\\\)");
+        test_serializer("\t\r\x08\x0c", "(\\t\\r\\b\\f)");
+        test_serializer("ü", "(\\303\\274)");
+    }
+
+    #[test]
+    fn test_char_is_escaped() {
+        test_serializer('a', "(a)");
+        test_serializer('(', "(\\()");
+        test_serializer(')', "(\\))");
+        test_serializer('\\', "(\\\\)");
+        test_serializer('\n', "(\\n)");
     }
 
     #[test]
@@ -367,5 +388,60 @@ mod test {
 
         test_serializer(TEnum::A, "/A");
         test_serializer(TEnum::B(10, 20), "10 20 B");
+    }
+
+    fn serialize<T: Serialize>(val: T) -> Result<String> {
+        let mut content: Vec<u8> = vec![];
+        val.serialize(&mut PdfSerializer {
+            output: &mut content,
+        })?;
+        Ok(String::from_utf8(content).unwrap())
+    }
+
+    #[test]
+    fn test_newtype_variant_is_written_as_its_value() {
+        #[derive(Serialize)]
+        enum Entry {
+            Number(i64),
+            Name(&'static str),
+        }
+        test_serializer(Entry::Number(5), "5");
+        test_serializer(Entry::Name("x"), "(x)");
+    }
+
+    #[test]
+    fn test_struct_variant_is_an_error() {
+        #[derive(Serialize)]
+        enum Shape {
+            Rect { width: u32 },
+        }
+        match serialize(Shape::Rect { width: 3 }) {
+            Err(Error::Custom(msg)) => assert!(msg.contains("Shape::Rect"), "{}", msg),
+            other => panic!("expected an error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_custom_error_is_returned() {
+        struct Failing;
+        impl Serialize for Failing {
+            fn serialize<S: Serializer>(&self, _: S) -> std::result::Result<S::Ok, S::Error> {
+                Err(ser::Error::custom("broken value"))
+            }
+        }
+        match serialize([Failing]) {
+            Err(Error::Custom(msg)) => assert_eq!(msg, "broken value"),
+            other => panic!("expected an error, got {:?}", other),
+        }
+        assert_eq!(Error::Custom("broken value".to_owned()).to_string(), "broken value");
+    }
+
+    #[test]
+    fn test_non_finite_floats_are_clamped() {
+        test_serializer(1.5f64, "1.5");
+        test_serializer(f64::NAN, "0");
+        test_serializer(f32::NAN, "0");
+        test_serializer(f64::INFINITY, "340282346638528860000000000000000000000");
+        test_serializer(f64::NEG_INFINITY, "-340282346638528860000000000000000000000");
     }
 }

@@ -127,10 +127,21 @@ pub trait PdfFormat: std::fmt::Debug {
     }
 }
 
+/// Writes a name object (ISO 32000-1, 7.3.5). Bytes outside of the printable ASCII range,
+/// delimiters and `#` are written as `#` followed by two hexadecimal digits.
 impl<'a> PdfFormat for &'a str {
     fn write(&self, output: &mut Formatter) -> Result<()> {
-        // TODO: proper escaping
-        write!(output, "/{}", self)
+        output.write_all(b"/")?;
+        for &byte in self.as_bytes() {
+            match byte {
+                b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#' => {
+                    write!(output, "#{:02X}", byte)?
+                }
+                b'!'..=b'~' => output.write_all(&[byte])?,
+                _ => write!(output, "#{:02X}", byte)?,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -229,10 +240,30 @@ impl PdfFormat for Vec<u8> {
     }
 }
 
+/// The largest magnitude of a real number that PDF readers are expected to handle
+/// (ISO 32000-1, Annex C.2: approximately ±3.403 × 10^38, the range of a 32-bit float).
+pub const MAX_REAL: f64 = f32::MAX as f64;
+
+/// Makes a real number representable in PDF, which has no NaN or infinity: NaN becomes 0, and
+/// infinite or too large values are clamped to `±MAX_REAL`. Logs a warning when it changes
+/// the value, since this usually points to a bug in the caller (like a division by zero).
+pub(crate) fn sanitize_real(value: f64) -> f64 {
+    if value.is_nan() {
+        log::warn!("Cannot write NaN to a PDF, writing 0 instead");
+        0.0
+    } else if value.abs() > MAX_REAL {
+        let clamped = MAX_REAL.copysign(value);
+        log::warn!("Cannot write {} to a PDF, writing {} instead", value, clamped);
+        clamped
+    } else {
+        value
+    }
+}
+
 /// Writes a real number with at most two decimals, without trailing zeros
 /// (`20.00` becomes `20`, `-41.50` becomes `-41.5`) to keep content streams small.
 fn write_trimmed_real(output: &mut Formatter, value: f64) -> Result<()> {
-    let formatted = format!("{:.2}", value);
+    let formatted = format!("{:.2}", sanitize_real(value));
     let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
     match trimmed {
         "" | "-" | "-0" => write!(output, "0"),
@@ -420,5 +451,92 @@ mod test {
         let mut outp = vec![];
         outp.write_hex_escaped(b"\nabc").unwrap();
         assert_eq!("0A616263", std::str::from_utf8(&outp).unwrap());
+    }
+
+    fn written(object: &dyn PdfFormat) -> String {
+        let mut buffer = Vec::new();
+        object
+            .write(&mut Formatter {
+                writer: &mut buffer,
+            })
+            .unwrap();
+        String::from_utf8(buffer).unwrap()
+    }
+
+    #[test]
+    fn reals_are_trimmed() {
+        assert_eq!(written(&20.0f64), "20");
+        assert_eq!(written(&-41.5f64), "-41.5");
+        assert_eq!(written(&0.126f64), "0.13");
+        assert_eq!(written(&1.5f32), "1.5");
+        assert_eq!(written(&0.0f64), "0");
+        assert_eq!(written(&-0.0f64), "0");
+        assert_eq!(written(&-0.001f64), "0");
+        assert_eq!(written(&1e10f64), "10000000000");
+    }
+
+    #[test]
+    fn nan_is_written_as_zero() {
+        assert_eq!(written(&f64::NAN), "0");
+        assert_eq!(written(&f32::NAN), "0");
+        assert_eq!(written(&-f64::NAN), "0");
+    }
+
+    #[test]
+    fn infinite_and_huge_reals_are_clamped() {
+        let max = format!("{:.0}", MAX_REAL);
+        assert_eq!(max, "340282346638528859811704183484516925440");
+        assert_eq!(written(&f64::INFINITY), max);
+        assert_eq!(written(&f64::NEG_INFINITY), format!("-{}", max));
+        assert_eq!(written(&f32::INFINITY), max);
+        assert_eq!(written(&1e300f64), max);
+        assert_eq!(written(&-1e300f64), format!("-{}", max));
+        // the largest f32 itself is in range
+        assert_eq!(written(&f32::MAX), max);
+    }
+
+    #[test]
+    fn plain_names_are_written_unchanged() {
+        assert_eq!(written(&"Type"), "/Type");
+        assert_eq!(written(&"F0"), "/F0");
+        assert_eq!(written(&"A;B-C_D.E*F!G~"), "/A;B-C_D.E*F!G~");
+        assert_eq!(written(&""), "/");
+    }
+
+    #[test]
+    fn special_characters_in_names_are_escaped() {
+        assert_eq!(written(&"My Font"), "/My#20Font");
+        assert_eq!(written(&"a#b"), "/a#23b");
+        assert_eq!(written(&"a/b"), "/a#2Fb");
+        assert_eq!(written(&"()<>[]{}%"), "/#28#29#3C#3E#5B#5D#7B#7D#25");
+        assert_eq!(written(&"tab\there"), "/tab#09here");
+        assert_eq!(written(&"ü"), "/#C3#BC");
+        assert_eq!(written(&"x\x7f"), "/x#7F");
+        assert_eq!(written(&String::from("A B")), "/A#20B");
+    }
+
+    #[test]
+    fn literal_strings_are_escaped() {
+        assert_eq!(written(&&b"plain text"[..]), "(plain text)");
+        assert_eq!(written(&&b"a(b)c\\d"[..]), "(a\\(b\\)c\\\\d)");
+        assert_eq!(written(&&b"\n\r\t\x08\x0c"[..]), "(\\n\\r\\t\\b\\f)");
+        assert_eq!(written(&&b"\x00\x7f\xff"[..]), "(\\000\\177\\377)");
+        assert_eq!(written(&b"%".to_vec()), "(%)");
+    }
+
+    #[test]
+    fn ascii_text_strings_are_literal_strings() {
+        assert_eq!(written(&TextString("Hello World".to_owned())), "(Hello World)");
+        assert_eq!(written(&TextString("a (b)".to_owned())), "(a \\(b\\))");
+        assert_eq!(written(&TextString(String::new())), "()");
+    }
+
+    #[test]
+    fn other_text_strings_are_utf16_with_bom() {
+        assert_eq!(written(&TextString("für".to_owned())), "<FEFF006600FC0072>");
+        // control characters are not printable, so they force the UTF-16 form
+        assert_eq!(written(&TextString("a\nb".to_owned())), "<FEFF0061000A0062>");
+        // characters outside the BMP become surrogate pairs
+        assert_eq!(written(&TextString("𝄞".to_owned())), "<FEFFD834DD1E>");
     }
 }

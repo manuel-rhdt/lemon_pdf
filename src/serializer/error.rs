@@ -11,24 +11,28 @@ pub enum Error {
     Utf8(Utf8Error),
     FromUtf8(FromUtf8Error),
     SpuriousDictEnd,
+    /// An error reported by a `Serialize` or `Deserialize` implementation, or a value that
+    /// cannot be represented in PDF.
+    #[from(ignore)]
+    Custom(String),
 }
 
 impl std::error::Error for Error {}
 
 impl ser::Error for Error {
-    fn custom<T>(_msg: T) -> Self
+    fn custom<T>(msg: T) -> Self
     where
         T: std::fmt::Display,
     {
-        todo!()
+        Error::Custom(msg.to_string())
     }
 }
 
 impl de::Error for Error {
-    fn custom<T>(_msg: T) -> Self
+    fn custom<T>(msg: T) -> Self
     where
         T: std::fmt::Display,
     {
-        todo!()
+        Error::Custom(msg.to_string())
     }
 }
