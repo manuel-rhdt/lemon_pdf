@@ -13,13 +13,11 @@
 //    limitations under the License.
 
 use std::io::{Result, Write};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::document::{DocumentContext, DocumentCatalog, DocumentInfo};
 use crate::object::{Formatter, IndirectReference, PdfFormat};
-
-use crypto::digest::Digest;
-use crypto::md5::Md5;
 
 #[derive(Debug, Clone)]
 struct HexString(String);
@@ -30,13 +28,32 @@ impl PdfFormat for HexString {
     }
 }
 
+/// The 128-bit FNV-1a hash (http://www.isthe.com/chongo/tech/comp/fnv/).
+///
+/// Not a cryptographic hash: it is only used to make file identifiers unlikely to collide.
+fn fnv1a_128(bytes: &[u8]) -> u128 {
+    const OFFSET_BASIS: u128 = 0x6c62272e_07bb0142_62b82175_6295c58d;
+    const PRIME: u128 = 0x00000000_01000000_00000000_0000013b;
+    bytes.iter().fold(OFFSET_BASIS, |hash, &byte| {
+        (hash ^ u128::from(byte)).wrapping_mul(PRIME)
+    })
+}
+
+/// A file identifier (the `/ID` entry of the trailer, ISO 32000-1, 14.4) that is unlikely to be
+/// the same for two different files: a hash of the current time, the file length, the process
+/// and a counter of the documents written by this process.
 fn get_digest(file_len: u64) -> HexString {
-    let mut md5 = Md5::new();
-    let time = SystemTime::now();
-    let time = format!("{:?}", time);
-    md5.input_str(&time);
-    md5.input_str(&format!("{}", file_len));
-    HexString(md5.result_str())
+    static DOCUMENTS: AtomicU64 = AtomicU64::new(0);
+
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let mut input = Vec::with_capacity(36);
+    input.extend_from_slice(&time.to_le_bytes());
+    input.extend_from_slice(&file_len.to_le_bytes());
+    input.extend_from_slice(&std::process::id().to_le_bytes());
+    input.extend_from_slice(&DOCUMENTS.fetch_add(1, Ordering::Relaxed).to_le_bytes());
+    HexString(format!("{:032x}", fnv1a_128(&input)))
 }
 
 pub struct Trailer {
@@ -100,5 +117,32 @@ impl Trailer {
 
         writeln!(context.output, "%%EOF")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fnv1a_128_matches_reference_values() {
+        assert_eq!(fnv1a_128(b""), 0x6c62272e07bb014262b821756295c58d);
+        assert_eq!(fnv1a_128(b"a"), 0xd228cb696f1a8caf78912b704e4a8964);
+        assert_eq!(fnv1a_128(b"foobar"), 0x343e1662793c64bf6f0d3597ba446f18);
+    }
+
+    #[test]
+    fn digest_is_32_hex_digits() {
+        let HexString(digest) = get_digest(1234);
+        assert_eq!(digest.len(), 32);
+        assert!(digest.bytes().all(|b| b.is_ascii_hexdigit()), "{}", digest);
+    }
+
+    #[test]
+    fn digests_differ_for_documents_written_at_once() {
+        // same file length and (possibly) the same timestamp: the counter must tell them apart
+        let digests: std::collections::HashSet<_> =
+            (0..100).map(|_| get_digest(1000).0).collect();
+        assert_eq!(digests.len(), 100);
     }
 }

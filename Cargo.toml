@@ -5,14 +5,12 @@ authors = ["Manuel Reinhardt <manuel.rhdt@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-derive_more = "0.99.5"
+derive_more = { version = "2", features = ["display", "from"] }
 flate2 = "1"
 byteorder = "1"
 lemon_pdf_derive = { path = "./lemon_pdf_derive" }
-rust-crypto = "0.2.36"
-bitflags = "1"
+bitflags = "2"
 log = "0.4.8"
-nom = "5"
 serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]

@@ -20,7 +20,6 @@ pub mod annotation;
 pub mod array;
 pub mod content;
 mod crossref;
-mod deserializer;
 pub mod dictionary;
 mod document;
 pub mod font;

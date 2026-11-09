@@ -21,6 +21,7 @@ pub enum FontStretch {
 }
 
 bitflags! {
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     pub struct FontFlags: u32 {
         const FIXED_PITCH = 1 << 0;
         const SERIF = 1 << 1;
