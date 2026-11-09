@@ -22,13 +22,14 @@ use lemon_pdf_derive::PdfFormat;
 use crate as lemon_pdf;
 
 use crate::crossref::CrossRef;
-use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference, Object};
+use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference, Object, TextString};
 use crate::pagetree::{Page, Pages};
 use crate::serializer::PdfSerializer;
 use crate::{structure_tree::StructTreeRoot, trailer::Trailer};
 use log::error;
 
-pub type DocumentInfo = HashMap<String, Vec<u8>>;
+/// The document information dictionary, like `Title`, `Author` or `Subject`.
+pub type DocumentInfo = HashMap<String, TextString>;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Version {
@@ -95,8 +96,30 @@ where
 #[derive(Debug, PdfFormat, Default)]
 #[rename("Catalog")]
 pub(crate) struct DocumentCatalog {
-    pages: Option<IndirectReference<Pages>>,
-    struct_tree_root: Option<Object<StructTreeRoot>>
+    pages: IndirectReference<Pages>,
+    #[skip_if("Option::is_none")]
+    struct_tree_root: Option<Object<StructTreeRoot>>,
+    #[skip_if("Option::is_none")]
+    mark_info: Option<MarkInfo>,
+    #[skip_if("Option::is_none")]
+    lang: Option<TextString>,
+    #[skip_if("Option::is_none")]
+    viewer_preferences: Option<ViewerPreferences>,
+}
+
+/// Whether the document is a tagged PDF.
+#[derive(Debug, PdfFormat, Default)]
+#[omit_type(true)]
+struct MarkInfo {
+    marked: bool,
+}
+
+#[derive(Debug, PdfFormat, Default)]
+#[omit_type(true)]
+struct ViewerPreferences {
+    /// Show the `Title` of the document information dictionary in the title bar of the viewer
+    /// instead of the file name.
+    display_doc_title: bool,
 }
 
 pub struct DocumentContext<'a> {
@@ -104,7 +127,9 @@ pub struct DocumentContext<'a> {
     pub version: Version,
     pub(crate) crossref: CrossRef,
     document_catalog: Option<DocumentCatalog>,
-    page_tree: Option<Pages>,
+    /// The root of the page tree. It is written when the document is finished, to the reference
+    /// in the document catalog.
+    page_tree: Pages,
     /// If this hash map is not empty, a document information dictionary with the corresponding
     /// entries will be created.
     pub document_info: DocumentInfo,
@@ -139,14 +164,18 @@ impl<'a> DocumentContext<'a> {
             output: OffsetTrackingWriter::new(Box::new(writer)),
             version,
             crossref: Default::default(),
-            document_catalog: Some(DocumentCatalog::default()),
-            page_tree: Some(Pages::new()),
+            document_catalog: None,
+            page_tree: Pages::new(),
             document_info: Default::default(),
             dangling_references: Default::default(),
             object_streams: true,
             pending_objects: Vec::new(),
             pending_bytes: 0,
         };
+        context.document_catalog = Some(DocumentCatalog {
+            pages: context.create_reference(),
+            ..Default::default()
+        });
         context.start_pdf()?;
         Ok(context)
     }
@@ -166,7 +195,9 @@ impl<'a> DocumentContext<'a> {
         Ok(reference)
     }
 
-    pub fn create_reference<T: serde::Serialize>(&mut self) -> IndirectReference<T> {
+    /// Creates a reference for an object that is written later with `write_referenced_object`
+    /// or `write_reserved_object`, so that other objects can refer to it before it exists.
+    pub fn create_reference<T>(&mut self) -> IndirectReference<T> {
         let num = self.crossref.add_entry(0, 0);
         let reference = IndirectReference::new(i64::from(num), 0);
         self.dangling_references.insert(reference.raw());
@@ -278,9 +309,71 @@ impl<'a> DocumentContext<'a> {
         Ok(())
     }
 
-    pub fn add_page(&mut self, page: Page) {
-        if let Some(p) = self.page_tree.as_mut() {
-            p.add_page(page)
+    /// Writes a page and adds it to the page tree of the document.
+    pub fn add_page(&mut self, page: Page) -> Result<IndirectReference<Page>, Error> {
+        let reference = self.create_reference();
+        self.add_reserved_page(reference, page)?;
+        Ok(reference)
+    }
+
+    /// Like `add_page`, but writes the page to a reference from `create_reference`, for when
+    /// other objects have to refer to the page before it is finished.
+    pub fn add_reserved_page(
+        &mut self,
+        reference: IndirectReference<Page>,
+        mut page: Page,
+    ) -> Result<(), Error> {
+        page.set_parent(self.page_tree_reference());
+        self.write_reserved_object(reference, page)?;
+        self.page_tree.kids.push(reference.convert());
+        self.page_tree.count += 1;
+        Ok(())
+    }
+
+    fn page_tree_reference(&self) -> IndirectReference<Pages> {
+        self.document_catalog
+            .as_ref()
+            .expect("No document catalog")
+            .pages
+    }
+
+    /// Writes an object to a reference obtained from `create_reference`.
+    pub fn write_reserved_object<T: PdfFormat>(
+        &mut self,
+        reference: IndirectReference<T>,
+        object: T,
+    ) -> Result<(), Error> {
+        self.dangling_references.remove(&reference.raw());
+        self.write_indirect_object(object, reference.raw())
+    }
+
+    /// Sets the root of the structure tree (`/StructTreeRoot`) of the document catalog.
+    pub fn set_struct_tree_root(&mut self, root: IndirectReference<StructTreeRoot>) {
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.struct_tree_root = Some(root.into());
+        }
+    }
+
+    /// Sets whether the document is a tagged PDF (`/MarkInfo << /Marked true >>`).
+    pub fn set_marked(&mut self, marked: bool) {
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.mark_info = Some(MarkInfo { marked });
+        }
+    }
+
+    /// Sets the natural language of the document (`/Lang`), a BCP 47 language tag.
+    pub fn set_lang(&mut self, lang: &str) {
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.lang = Some(TextString(lang.to_owned()));
+        }
+    }
+
+    /// Makes viewers show the `Title` of the document information instead of the file name.
+    pub fn set_display_doc_title(&mut self, display: bool) {
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.viewer_preferences = Some(ViewerPreferences {
+                display_doc_title: display,
+            });
         }
     }
 
@@ -300,35 +393,32 @@ impl<'a> DocumentContext<'a> {
     }
 
     fn write_document_catalog(&mut self) -> Result<IndirectReference<DocumentCatalog>, Error> {
-        let page_tree = self
-            .page_tree
-            .take()
-            .expect("Internal Error: context has no pagetree.");
-        let page_tree = page_tree.write_to_context(self)?;
-        let mut catalog = self.document_catalog.take().expect("No document catalog");
-        catalog.pages = Some(page_tree);
+        let page_tree = std::mem::take(&mut self.page_tree);
+        self.write_reserved_object(self.page_tree_reference(), page_tree)?;
+        let catalog = self.document_catalog.take().expect("No document catalog");
         self.write_object(catalog)
     }
 
     fn write_document_info(&mut self) -> Result<IndirectReference<DocumentInfo>, Error> {
         let doc_info = std::mem::replace(&mut self.document_info, HashMap::default());
-        self.write_object1(doc_info)
+        self.write_object(doc_info)
     }
     /// Finish the `Context` and flush all remaining writes.
     pub fn finish(mut self) -> Result<(), Error> {
-        for dangling_ref in &self.dangling_references {
-            error!(
-                "Created indirect reference {:?} but never assigned an object to it!",
-                dangling_ref
-            )
-        }
-
         let document_catalog = self.write_document_catalog()?;
         let document_info = if !self.document_info.is_empty() {
             Some(self.write_document_info()?)
         } else {
             None
         };
+
+        // the page tree is only written with the document catalog
+        for dangling_ref in &self.dangling_references {
+            error!(
+                "Created indirect reference {:?} but never assigned an object to it!",
+                dangling_ref
+            )
+        }
 
         self.flush_object_stream()?;
 

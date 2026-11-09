@@ -77,7 +77,8 @@ impl<'b, W: Write> Serializer for &'b mut PdfSerializer<W> {
                 b'\n' => self.output.write_all(b"\\n")?,
                 b')' => self.output.write_all(b"\\)")?,
                 b'(' => self.output.write_all(b"\\(")?,
-                non_graphic if !byte.is_ascii_graphic() => write!(self.output, "\\d{:03o}", non_graphic)?,
+                b'\\' => self.output.write_all(b"\\\\")?,
+                non_graphic if !byte.is_ascii_graphic() && byte != b' ' => write!(self.output, "\\{:03o}", non_graphic)?,
                 other => self.output.write_all(&[other])?
             }
         }
@@ -317,7 +318,7 @@ mod test {
 
     #[test]
     fn test_escape_sequence() {
-        test_serializer(["\n", "\x00"], "[ (\\n) (\\d000) ]")
+        test_serializer(["\n", "\x00"], "[ (\\n) (\\000) ]")
     }
 
     #[test]

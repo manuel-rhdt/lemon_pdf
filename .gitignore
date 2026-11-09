@@ -2,3 +2,4 @@
 /target
 **/*.rs.bk
 Cargo.lock
+lemon_pdf_derive/target

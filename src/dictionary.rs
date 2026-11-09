@@ -12,7 +12,7 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::io::Result;
 use std::ops::Deref;
@@ -61,6 +61,21 @@ where
         let mut dict_fmt = f.format_dictionary();
         for (key, value) in self.iter() {
             dict_fmt = dict_fmt.key_value(key, value.deref());
+        }
+        dict_fmt.finish()
+    }
+}
+
+/// A dictionary with its entries in a deterministic (sorted) order.
+impl<T, U> PdfFormat for BTreeMap<T, U>
+where
+    T: PdfFormat + Ord,
+    U: PdfFormat,
+{
+    fn write(&self, f: &mut Formatter) -> Result<()> {
+        let mut dict_fmt = f.format_dictionary();
+        for (key, value) in self.iter() {
+            dict_fmt = dict_fmt.key_value(key, value);
         }
         dict_fmt.finish()
     }

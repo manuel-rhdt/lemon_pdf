@@ -39,8 +39,7 @@ pub use crate::document::*;
 #[cfg(test)]
 mod tests {
     use crate::annotation::{Annotation, Destination, GoToAction, LinkAction, LinkAnnotation, UriAction};
-    use crate::object::PdfFormat;
-    use crate::pagetree::Page;
+    use crate::object::{PdfFormat, TextString};
     use crate::Pt;
 
     #[test]
@@ -50,13 +49,14 @@ mod tests {
 
     #[test]
     fn link_annotation_is_written() {
-        let mut page = Page::new();
-        let link = Annotation::Link(LinkAnnotation {
-            rect: [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
-            action: LinkAction::Uri(UriAction {
-                uri: "https://example.com".to_owned(),
+        let mut link = LinkAnnotation::new(
+            [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
+            LinkAction::Uri(UriAction {
+                uri: b"https://example.com".to_vec(),
             }),
-        });
+        );
+        link.contents = Some(TextString("Beispiel für einen Link".to_owned()));
+        let link = Annotation::Link(link);
         let mut buffer = Vec::new();
         let mut formatter = crate::object::Formatter {
             writer: &mut buffer,
@@ -66,19 +66,23 @@ mod tests {
         assert!(output.contains("/Subtype /Link"), "output was: {}", output);
         assert!(output.contains("/URI (https://example.com)"), "output was: {}", output);
         assert!(output.contains("/Rect"), "output was: {}", output);
+        assert!(output.contains("/Type /Annot\n/Subtype /Link"), "output was: {}", output);
+        assert!(output.contains("/S /URI"), "output was: {}", output);
+        assert!(output.contains("/Contents <FEFF"), "output was: {}", output);
+        assert!(!output.contains("StructParent"), "output was: {}", output);
     }
 
     #[test]
     fn goto_link_annotation_is_written() {
-        let link = Annotation::Link(LinkAnnotation {
-            rect: [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
-            action: LinkAction::GoTo(GoToAction {
+        let link = Annotation::Link(LinkAnnotation::new(
+            [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
+            LinkAction::GoTo(GoToAction {
                 destination: Destination {
                     page_index: 2,
                     point: (Pt(10.0), Pt(20.0)),
                 },
             }),
-        });
+        ));
         let mut buffer = Vec::new();
         let mut formatter = crate::object::Formatter {
             writer: &mut buffer,

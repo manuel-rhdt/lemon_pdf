@@ -25,6 +25,7 @@ use lemon_pdf::font::{
     encoding::{EncodingEntry, PredefinedEncoding},
     Font,
 };
+use lemon_pdf::object::TextString;
 use lemon_pdf::pagetree::Page;
 use lemon_pdf::{DocumentContext, Pt, Version};
 
@@ -50,11 +51,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         Ok(())
     })?;
 
-    context.add_page(page);
+    context.add_page(page)?;
 
     context
         .document_info
-        .insert("Title".to_owned(), b"My Document".to_vec());
+        .insert("Title".to_owned(), TextString("My Document".to_owned()));
 
     context.finish()?;
     Ok(())

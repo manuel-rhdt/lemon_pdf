@@ -17,40 +17,27 @@ use std::io::Result;
 use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat;
 
-use crate::object::{Formatter, PdfFormat};
+use crate::object::{Formatter, PdfFormat, TextString};
 use crate::Pt;
 
 /// An action that associates a resource (such as a URL) with an annotation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[rename("Action")]
+#[constant(S = "URI")]
 pub struct UriAction {
-    /// The URI to open when the annotation is activated.
-    pub uri: String,
-}
-
-impl PdfFormat for UriAction {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        let uri: &[u8] = self.uri.as_bytes();
-        f.format_dictionary()
-            .key_value(&"S", &"URI")
-            .key_value(&"URI", &uri)
-            .finish()
-    }
+    /// The URI to open when the annotation is activated (an ASCII string).
+    #[rename("URI")]
+    pub uri: Vec<u8>,
 }
 
 /// An action that jumps to a destination within the document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[rename("Action")]
+#[constant(S = "GoTo")]
 pub struct GoToAction {
     /// A destination reference within the PDF document.
+    #[rename("D")]
     pub destination: Destination,
-}
-
-impl PdfFormat for GoToAction {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        f.format_dictionary()
-            .key_value(&"S", &"GoTo")
-            .key_value(&"D", &self.destination)
-            .finish()
-    }
 }
 
 /// A destination inside the document with a layouted point to jump to.
@@ -62,6 +49,7 @@ pub struct Destination {
     pub point: (Pt, Pt),
 }
 
+// A destination is an array of mixed types, which cannot be derived.
 impl PdfFormat for Destination {
     fn write(&self, f: &mut Formatter) -> Result<()> {
         let top = self.point.1;
@@ -79,7 +67,7 @@ impl PdfFormat for Destination {
 }
 
 /// The action of a link annotation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum LinkAction {
     /// Opens a URI.
     Uri(UriAction),
@@ -87,36 +75,36 @@ pub enum LinkAction {
     GoTo(GoToAction),
 }
 
-impl PdfFormat for LinkAction {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        use LinkAction::*;
-        match *self {
-            Uri(ref action) => action.write(f),
-            GoTo(ref action) => action.write(f),
-        }
-    }
-}
-
 /// A hyperlink annotation on a page.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[rename("Annot")]
+#[constant(Subtype = "Link")]
 pub struct LinkAnnotation {
     /// The rectangle of the link, in default user space coordinates of the page.
     pub rect: [Pt; 4],
+    /// The border of the link: horizontal and vertical corner radius and the width.
+    pub border: [i64; 3],
     /// What happens when the link is activated.
+    #[rename("A")]
     pub action: LinkAction,
+    /// A description of the link for assistive technology.
+    #[skip_if("Option::is_none")]
+    pub contents: Option<TextString>,
+    /// The key of the annotation in the parent tree of the structure tree (tagged PDF).
+    #[skip_if("Option::is_none")]
+    pub struct_parent: Option<i64>,
 }
 
-impl PdfFormat for LinkAnnotation {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        let rect = self.rect;
-        let border = [0i64, 0, 0];
-        f.format_dictionary()
-            .key_value(&"Type", &"Annot")
-            .key_value(&"Subtype", &"Link")
-            .key_value(&"Rect", &rect)
-            .key_value(&"Border", &border)
-            .key_value(&"A", &self.action)
-            .finish()
+impl LinkAnnotation {
+    /// A link without a border.
+    pub fn new(rect: [Pt; 4], action: LinkAction) -> Self {
+        LinkAnnotation {
+            rect,
+            border: [0, 0, 0],
+            action,
+            contents: None,
+            struct_parent: None,
+        }
     }
 }
 

@@ -28,26 +28,19 @@ use crate::object::{IndirectReference, Object, Value};
 use crate::stream::{Stream, StreamEncoder, StreamFilter};
 use crate::Pt;
 
-#[derive(Debug, Clone, PdfFormat)]
+/// A node of the page tree with other page tree nodes or pages as its kids.
+#[derive(Debug, Clone, Default, PartialEq, PdfFormat)]
 pub struct Pages {
-    count: i64,
+    /// The number of pages (leaf nodes) below this node.
+    pub count: i64,
     #[skip_if("Option::is_none")]
-    parent: Option<IndirectReference<Pages>>,
-    kids: Vec<Object<PageTreeNode>>,
+    pub parent: Option<IndirectReference<Pages>>,
+    pub kids: Vec<IndirectReference<PageTreeNode>>,
 }
 
-impl Default for Pages {
-    fn default() -> Self {
-        Pages {
-            kids: Vec::new(),
-            parent: None,
-            count: -1,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PdfFormat)]
-enum PageTreeNode {
+/// A kid of a page tree node.
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
+pub enum PageTreeNode {
     Tree(Pages),
     Page(Page),
 }
@@ -55,43 +48,6 @@ enum PageTreeNode {
 impl Pages {
     pub fn new() -> Self {
         Default::default()
-    }
-
-    #[allow(unused)]
-    pub fn add_pagetree(&mut self, tree: Pages) {
-        self.kids.push(Object::Direct(PageTreeNode::Tree(tree)))
-    }
-
-    pub fn add_page(&mut self, page: Page) {
-        self.kids.push(Object::Direct(PageTreeNode::Page(page)))
-    }
-
-    // make all children indirect objects
-    pub fn write_to_context(
-        mut self,
-        context: &mut DocumentContext,
-    ) -> Result<IndirectReference<Pages>> {
-        context.write_object_fn(|context, self_reference| {
-            let mut array = Vec::new();
-            for child in self.kids {
-                match child {
-                    Object::Direct(PageTreeNode::Tree(mut tree)) => {
-                        tree.parent = Some(self_reference);
-                        let tree_obj = tree.write_to_context(context)?;
-                        array.push(tree_obj.convert().into())
-                    }
-                    Object::Direct(PageTreeNode::Page(mut page)) => {
-                        page.set_parent(self_reference);
-                        let page_obj = context.write_object(page)?;
-                        array.push(page_obj.convert().into());
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            self.kids = array;
-            self.count = self.kids.len() as i64;
-            Ok(self)
-        })
     }
 }
 
@@ -102,17 +58,24 @@ pub struct ResourceDictionary {
 }
 
 /// A convenience struct to create PDF pages.
-#[derive(Clone, Debug, PdfFormat)]
+#[derive(Clone, Debug, PartialEq, PdfFormat)]
 pub struct Page {
+    #[skip_if("Option::is_none")]
     pub resources: Option<ResourceDictionary>,
     pub media_box: [Pt; 4],
     /// The annotations of the page. Only emitted if the vector is not empty.
     #[rename("Annots")]
-    #[skip_if(Vec::is_empty)]
+    #[skip_if("Vec::is_empty")]
     pub annotations: Vec<Object<Annotation>>,
     #[skip_if("Option::is_none")]
     pub parent: Option<IndirectReference<Pages>>,
     pub contents: Vec<IndirectReference<Stream>>,
+    /// The key of the page in the parent tree of the structure tree (tagged PDF).
+    #[skip_if("Option::is_none")]
+    pub struct_parents: Option<i64>,
+    /// The tab order of the annotations; `S` follows the structure tree.
+    #[skip_if("Option::is_none")]
+    pub tabs: Option<String>,
 }
 impl Page {
     pub fn new() -> Self {
@@ -122,6 +85,8 @@ impl Page {
             parent: None,
             annotations: Vec::new(),
             contents: Vec::new(),
+            struct_parents: None,
+            tabs: None,
         }
     }
 
@@ -129,12 +94,15 @@ impl Page {
         self.media_box = media_box.as_array()
     }
 
-    /// Adds an annotation to the page. The annotation is written as an indirect object when the
-    /// page is added to the document.
-    pub fn add_annotation(&mut self, context: &mut DocumentContext, annotation: Annotation) -> Result<()> {
+    /// Writes an annotation as an indirect object and adds it to the page.
+    pub fn add_annotation(
+        &mut self,
+        context: &mut DocumentContext,
+        annotation: Annotation,
+    ) -> Result<IndirectReference<Annotation>> {
         let annotation = context.write_object(annotation)?;
         self.annotations.push(annotation.into());
-        Ok(())
+        Ok(annotation)
     }
 
     fn get_context<'context, 'borrow>(

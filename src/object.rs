@@ -162,6 +162,27 @@ impl PdfFormat for String {
     }
 }
 
+/// A text string (ISO 32000-1, 7.9.2.2): human-readable text such as a title, a language tag
+/// or an alternate description.
+///
+/// Printable ASCII is written as a literal string, anything else as UTF-16BE with a byte order
+/// mark (a hexadecimal string).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TextString(pub String);
+
+impl PdfFormat for TextString {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        if self.0.bytes().all(|byte| byte == b' ' || byte.is_ascii_graphic()) {
+            return self.0.as_bytes().write(output);
+        }
+        write!(output, "<FEFF")?;
+        for unit in self.0.encode_utf16() {
+            write!(output, "{:04X}", unit)?;
+        }
+        write!(output, ">")
+    }
+}
+
 pub trait WriteEscaped {
     fn write_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()>;
     fn write_hex_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()>;
@@ -178,7 +199,8 @@ impl<W: Write> WriteEscaped for W {
                 b'\n' => self.write_all(b"\\n")?,
                 b')' => self.write_all(b"\\)")?,
                 b'(' => self.write_all(b"\\(")?,
-                non_graphic if !byte.is_ascii_graphic() => write!(self, "\\d{:03o}", non_graphic)?,
+                b'\\' => self.write_all(b"\\\\")?,
+                non_graphic if !byte.is_ascii_graphic() && byte != b' ' => write!(self, "\\{:03o}", non_graphic)?,
                 other => self.write_all(&[other])?
             }
         }
