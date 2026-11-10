@@ -27,16 +27,13 @@ use lemon_pdf_derive::PdfFormat;
 pub struct ExtGState {
     /// The constant opacity for stroking operations, from 0 (transparent) to 1 (opaque).
     #[rename("CA")]
-    #[skip_if("Option::is_none")]
     pub stroke_alpha: Option<f64>,
     /// The constant opacity for all other painting operations (fills, text, images), from 0
     /// (transparent) to 1 (opaque).
     #[rename("ca")]
-    #[skip_if("Option::is_none")]
     pub fill_alpha: Option<f64>,
     /// The blend mode used to composite painted objects with the backdrop.
     #[rename("BM")]
-    #[skip_if("Option::is_none")]
     pub blend_mode: Option<BlendMode>,
 }
 

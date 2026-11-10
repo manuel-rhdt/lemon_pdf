@@ -11,7 +11,6 @@ byteorder = "1"
 lemon_pdf_derive = { path = "./lemon_pdf_derive" }
 bitflags = "2"
 log = "0.4.8"
-serde = { version = "1", features = ["derive"] }
 
 [build-dependencies]
 glob = "0.3.0"

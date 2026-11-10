@@ -12,68 +12,83 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Result, Write};
 
-use lemon_pdf_derive::PdfFormat;
+use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 use crate as lemon_pdf;
 
 use crate::font::Font;
 use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
 use crate::image::XObject;
-use crate::object::{Formatter, IndirectReference, PdfFormat, WriteEscaped};
+use crate::object::{
+    write_literal_string, Formatter, IndirectReference, Name, PdfFormat, WriteEscaped,
+};
 use crate::pagetree::{Page, ResourceDictionary};
-use crate::stream::StreamEncoder;
+use crate::stream::{Stream, StreamEncoder};
 use crate::DocumentContext;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, PdfFormat)]
 pub struct Pt(pub f64);
 
+/// The dictionary of a content stream, which has no entries besides `Length` and `Filter`.
+#[derive(Debug, Default, Clone, PartialEq, PdfDictionary)]
+#[omit_type(true)]
+pub struct ContentStreamDict {}
+
+/// A content stream (ISO 32000-1, 7.8.2): the operators that paint a page.
+pub type ContentStream = Stream<ContentStreamDict>;
+
 #[derive(Debug)]
 pub struct PageContext<'page, 'context, 'context_borrow> {
-    pub(crate) fonts: HashMap<IndirectReference<Font>, String>,
-    pub(crate) x_objects: HashMap<IndirectReference<XObject>, String>,
+    pub(crate) fonts: HashMap<IndirectReference<Font>, Name>,
+    pub(crate) x_objects: HashMap<IndirectReference<XObject>, Name>,
     /// Graphics state parameter dictionaries with their resource names. A `Vec` because
     /// `ExtGState` holds floats and cannot be hashed; pages only use a handful of them.
-    pub(crate) ext_g_states: Vec<(ExtGState, String)>,
+    pub(crate) ext_g_states: Vec<(ExtGState, Name)>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
 }
 
+/// Turns a map from objects to their resource names into a resource dictionary.
+fn by_name<T>(map: HashMap<IndirectReference<T>, Name>) -> BTreeMap<Name, IndirectReference<T>> {
+    map.into_iter().map(|(reference, key)| (key, reference)).collect()
+}
+
 impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_borrow> {
-    pub fn add_font(&mut self, font: IndirectReference<Font>) -> String {
+    /// Adds a font to the resources of the page and returns its resource name.
+    pub fn add_font(&mut self, font: IndirectReference<Font>) -> Name {
         let num_fonts = self.fonts.len();
-        let key = self
-            .fonts
+        self.fonts
             .entry(font)
-            .or_insert_with(|| format!("F{}", num_fonts));
-        key.clone()
+            .or_insert_with(|| Name::from(format!("F{}", num_fonts)))
+            .clone()
     }
 
     /// Adds an XObject (for example an image from `DocumentContext::write_image`) to the
     /// resources of the page and returns its resource name.
-    pub fn add_xobject(&mut self, x_object: IndirectReference<XObject>) -> String {
+    pub fn add_xobject(&mut self, x_object: impl Into<IndirectReference<XObject>>) -> Name {
         let num_x_objects = self.x_objects.len();
         self.x_objects
-            .entry(x_object)
-            .or_insert_with(|| format!("X{}", num_x_objects))
+            .entry(x_object.into())
+            .or_insert_with(|| Name::from(format!("X{}", num_x_objects)))
             .clone()
     }
 
     /// Adds a graphics state parameter dictionary to the resources of the page and returns its
     /// resource name. Adding an equal dictionary again returns the same name.
-    pub fn add_ext_gstate(&mut self, state: ExtGState) -> String {
+    pub fn add_ext_gstate(&mut self, state: ExtGState) -> Name {
         if let Some((_, key)) = self.ext_g_states.iter().find(|(other, _)| *other == state) {
             return key.clone();
         }
-        let key = format!("GS{}", self.ext_g_states.len());
+        let key = Name::from(format!("GS{}", self.ext_g_states.len()));
         self.ext_g_states.push((state, key.clone()));
         key
     }
 
     /// Applies a graphics state parameter dictionary from `add_ext_gstate` (`gs` operator).
-    pub fn set_ext_gstate(&mut self, key: &str) -> Result<()> {
+    pub fn set_ext_gstate(&mut self, key: &Name) -> Result<()> {
         self.write_operation1(key, "gs")
     }
 
@@ -98,13 +113,13 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     }
 
     /// Paints an XObject from `add_xobject` (`Do` operator) in the current user space.
-    pub fn draw_xobject(&mut self, key: &str) -> Result<()> {
+    pub fn draw_xobject(&mut self, key: &Name) -> Result<()> {
         self.write_operation1(key, "Do")
     }
 
     /// Paints an image from `add_xobject` into the rectangle with the lower left corner
     /// (`x`, `y`). The graphics state is left unchanged.
-    pub fn draw_image(&mut self, key: &str, x: Pt, y: Pt, width: Pt, height: Pt) -> Result<()> {
+    pub fn draw_image(&mut self, key: &Name, x: Pt, y: Pt, width: Pt, height: Pt) -> Result<()> {
         self.save_graphics_state()?;
         // images are painted into the unit square
         self.concatenate_matrix(width.0, 0.0, 0.0, height.0, x, y)?;
@@ -326,7 +341,7 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.apply_operator("ET")
     }
 
-    pub fn set_font(&mut self, font_key: &str, size: Pt) -> Result<()> {
+    pub fn set_font(&mut self, font_key: &Name, size: Pt) -> Result<()> {
         self.write_operation2(font_key, size, "Tf")
     }
 
@@ -334,8 +349,10 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.write_operation2(x, y, "Td")
     }
 
+    /// Shows glyphs of a simple font, one byte per glyph (`Tj` operator).
     pub fn draw_simple_glyphs(&mut self, characters: &[u8]) -> Result<()> {
-        self.write_operation1(characters, "Tj")
+        write_literal_string(&mut self.content_stream, characters)?;
+        write!(self.content_stream, " Tj ")
     }
 
     pub fn draw_cid_glyphs(&mut self, glyphs: impl IntoIterator<Item = u16>) -> Result<()> {
@@ -348,33 +365,20 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     }
 
     pub(crate) fn finish(self) -> Result<()> {
-        let mut font_dict = HashMap::new();
-        for (font_ref, font_key) in self.fonts {
-            font_dict.insert(font_key, font_ref);
-        }
-        let x_object = self
-            .x_objects
-            .into_iter()
-            .map(|(reference, key)| (key, reference))
-            .collect();
-        let ext_g_state = self
-            .ext_g_states
-            .into_iter()
-            .map(|(state, key)| (key, state))
-            .collect();
         let resources = ResourceDictionary {
-            font: font_dict,
-            x_object,
-            ext_g_state,
+            font: by_name(self.fonts),
+            x_object: by_name(self.x_objects),
+            ext_g_state: self
+                .ext_g_states
+                .into_iter()
+                .map(|(state, key)| (key, state))
+                .collect(),
         };
         self.page.resources = Some(resources);
 
-        let content_stream = self.content_stream.into_stream();
+        let content_stream = Stream::from_encoder(ContentStreamDict {}, self.content_stream)?;
         let content_stream_ref = self.pdf_context.write_object(content_stream)?;
-        let mut array = Vec::new();
-        array.push(content_stream_ref);
-        self.page.contents = array;
-
+        self.page.contents = vec![content_stream_ref];
         Ok(())
     }
 }

@@ -27,20 +27,19 @@ pub mod graphics_state;
 pub mod image;
 pub mod object;
 pub mod pagetree;
-mod serializer;
 pub mod stream;
 pub mod structure_tree;
 mod trailer;
 
 pub use self::content::Pt;
-pub use self::object::PdfFormat;
+pub use self::object::{IndirectObject, PdfDictionary, PdfFormat};
 pub use self::pagetree::Page;
 pub use crate::document::*;
 
 #[cfg(test)]
 mod tests {
     use crate::annotation::{Annotation, Destination, GoToAction, LinkAction, LinkAnnotation, UriAction};
-    use crate::object::{PdfFormat, TextString};
+    use crate::object::{ByteString, IndirectReference, PdfFormat, TextString};
     use crate::Pt;
 
     #[test]
@@ -53,7 +52,7 @@ mod tests {
         let mut link = LinkAnnotation::new(
             [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
             LinkAction::Uri(UriAction {
-                uri: b"https://example.com".to_vec(),
+                uri: ByteString::from("https://example.com"),
             }),
         );
         link.contents = Some(TextString("Beispiel für einen Link".to_owned()));
@@ -79,7 +78,7 @@ mod tests {
             [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
             LinkAction::GoTo(GoToAction {
                 destination: Destination {
-                    page_index: 2,
+                    page: IndirectReference::new(2, 0),
                     point: (Pt(10.0), Pt(20.0)),
                 },
             }),
@@ -91,6 +90,6 @@ mod tests {
         link.write(&mut formatter).unwrap();
         let output = String::from_utf8(buffer).unwrap();
         assert!(output.contains("/S /GoTo"), "output was: {}", output);
-        assert!(output.contains("/D [ 2 /XYZ 10 20 null ]"), "output was: {}", output);
+        assert!(output.contains("/D [ 2 0 R /XYZ 10 20 null ]"), "output was: {}", output);
     }
 }

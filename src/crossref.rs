@@ -14,7 +14,6 @@
 
 use std::io::{Result, Write};
 
-use crate::object::{Formatter, PdfFormat};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct CrossRef {
@@ -83,8 +82,9 @@ impl CrossRef {
     }
 }
 
-impl PdfFormat for CrossRef {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
+impl CrossRef {
+    /// Writes the classic cross-reference table (ISO 32000-1, 7.5.4).
+    pub fn write_table(&self, f: &mut dyn Write) -> Result<()> {
         writeln!(f, "xref")?;
         writeln!(f, "0 {}", self.entries.len()+1)?;
         write!(f, "{:0>10} {:0>5} f\r\n", self.next_free(0), 65535)?;
@@ -106,11 +106,7 @@ mod tests {
 
     fn written(crossref: &CrossRef) -> String {
         let mut buffer = Vec::new();
-        crossref
-            .write(&mut Formatter {
-                writer: &mut buffer,
-            })
-            .unwrap();
+        crossref.write_table(&mut buffer).unwrap();
         String::from_utf8(buffer).unwrap()
     }
 

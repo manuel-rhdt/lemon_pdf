@@ -13,7 +13,7 @@ use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat;
 
 use crate::annotation::Annotation;
-use crate::object::{Formatter, IndirectReference, PdfFormat, TextString};
+use crate::object::{ByteString, Formatter, IndirectReference, Name, PdfFormat, TextString};
 use crate::Page;
 
 /// The root of the structure tree, referenced from the document catalog.
@@ -65,7 +65,7 @@ impl<T: PdfFormat> PdfFormat for NumberTree<T> {
             }
         }
         f.format_dictionary()
-            .key_value(&"Nums", &Nums(&self.nums))
+            .key_value("Nums", &Nums(&self.nums))
             .finish()
     }
 }
@@ -137,7 +137,7 @@ pub enum StructType {
     Formula,
     Form,
     /// A non-standard structure type (map it to a standard type in the `RoleMap`).
-    Other(String),
+    Other(Name),
 }
 
 /// The parent of a structure element.
@@ -166,7 +166,6 @@ pub enum StructKid {
 #[rename("MCR")]
 pub struct MarkedContentReference {
     /// The page of the marked content (default: the `Pg` of the parent element).
-    #[skip_if("Option::is_none")]
     pub pg: Option<IndirectReference<Page>>,
     #[rename("MCID")]
     pub mcid: i64,
@@ -177,7 +176,6 @@ pub struct MarkedContentReference {
 #[rename("OBJR")]
 pub struct ObjectReference {
     /// The page of the object (default: the `Pg` of the parent element).
-    #[skip_if("Option::is_none")]
     pub pg: Option<IndirectReference<Page>>,
     pub obj: IndirectReference<Annotation>,
 }
@@ -185,7 +183,7 @@ pub struct ObjectReference {
 /// The value of a structure attribute.
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum AttributeValue {
-    Name(String),
+    Name(Name),
     Integer(i64),
     Number(f64),
     Text(TextString),
@@ -198,7 +196,7 @@ pub enum AttributeValue {
 pub struct AttributeObject {
     /// The owner, like `Layout`, `List`, `Table` or `PrintField`.
     #[rename("O")]
-    pub owner: String,
+    pub owner: Name,
     #[flatten]
     pub attributes: BTreeMap<String, AttributeValue>,
 }
@@ -212,10 +210,8 @@ pub struct StructElem {
     pub p: StructParent,
     /// The element identifier (a byte string).
     #[rename("ID")]
-    #[skip_if("Option::is_none")]
-    pub id: Option<Vec<u8>>,
+    pub id: Option<ByteString>,
     /// The page that the `Mcid` children are on.
-    #[skip_if("Option::is_none")]
     pub pg: Option<IndirectReference<Page>>,
     /// The children, in logical (reading) order.
     #[skip_if("Vec::is_empty")]
@@ -224,19 +220,14 @@ pub struct StructElem {
     #[skip_if("Vec::is_empty")]
     pub a: Vec<AttributeObject>,
     /// The title of the element.
-    #[skip_if("Option::is_none")]
     pub t: Option<TextString>,
     /// The language of the element if it differs from the language of its parent.
-    #[skip_if("Option::is_none")]
     pub lang: Option<TextString>,
     /// An alternate description, for example for figures and formulas.
-    #[skip_if("Option::is_none")]
     pub alt: Option<TextString>,
     /// The expanded form of an abbreviation.
-    #[skip_if("Option::is_none")]
     pub e: Option<TextString>,
     /// The text that is equivalent to the content of the element.
-    #[skip_if("Option::is_none")]
     pub actual_text: Option<TextString>,
 }
 
@@ -298,13 +289,13 @@ mod tests {
     #[test]
     fn custom_struct_type_and_attributes_are_written() {
         let mut elem = StructElem::new(
-            StructType::Other("Aside".to_owned()),
+            StructType::Other(Name::from("Aside")),
             StructParent::Root(IndirectReference::new(1, 0)),
         );
         let mut attributes = BTreeMap::new();
-        attributes.insert("Placement".to_owned(), AttributeValue::Name("Block".to_owned()));
+        attributes.insert("Placement".to_owned(), AttributeValue::Name(Name::from("Block")));
         elem.a = vec![AttributeObject {
-            owner: "Layout".to_owned(),
+            owner: Name::from("Layout"),
             attributes,
         }];
         let output = written(&elem);

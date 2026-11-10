@@ -12,6 +12,62 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
+//! The PDF object model (ISO 32000-1, 7.3).
+//!
+//! Three traits describe what can be written where:
+//!
+//! - [`PdfFormat`]: a *direct object* (number, string, name, array, dictionary, null or a
+//!   reference). Direct objects can be nested in arrays and dictionaries.
+//! - [`PdfDictionary`]: the entries of a dictionary. Every dictionary type derived with
+//!   `#[derive(PdfFormat)]` implements it; dictionaries that can only appear as the dictionary
+//!   of a stream derive only `PdfDictionary`.
+//! - [`IndirectObject`]: anything that can be written as an indirect object with
+//!   `DocumentContext::write_object`: every direct object, and streams
+//!   ([`Stream`](crate::stream::Stream)). Streams are not `PdfFormat`, so the type system
+//!   prevents them from being nested in other objects, which the PDF format forbids.
+//!
+//! A stream can be referred to, but not nested:
+//!
+//! ```
+//! # use lemon_pdf::{dictionary::Dictionary, object::*, stream::Stream, PdfFormat};
+//! # fn check(_: &dyn PdfFormat) {}
+//! let stream: Option<IndirectReference<Stream<Dictionary>>> = None;
+//! check(&stream);
+//! ```
+//!
+//! ```compile_fail
+//! # use lemon_pdf::{dictionary::Dictionary, object::*, stream::Stream, PdfFormat};
+//! # fn check(_: &dyn PdfFormat) {}
+//! let stream = Stream::new(Dictionary::new(), Vec::new());
+//! check(&Object::Direct(stream));
+//! ```
+//!
+//! Bytes are not implicitly a string; `ByteString` and `TextString` say which kind of string
+//! is meant, and `Name` is a name:
+//!
+//! ```compile_fail
+//! # use lemon_pdf::PdfFormat;
+//! # fn check(_: &dyn PdfFormat) {}
+//! check(&b"text".to_vec());
+//! ```
+//!
+//! ```compile_fail
+//! # use lemon_pdf::PdfFormat;
+//! # fn check(_: &dyn PdfFormat) {}
+//! check(&"Type");
+//! ```
+//!
+//! References to streams are typed by their dictionary, so a content stream can not be used
+//! as an image:
+//!
+//! ```compile_fail
+//! # use lemon_pdf::{content::ContentStream, image::ImageXObject, object::IndirectReference};
+//! fn image(reference: IndirectReference<ContentStream>) -> IndirectReference<ImageXObject> {
+//!     reference
+//! }
+//! ```
+
+use std::borrow::Cow;
 use std::io::{Result, Write};
 use std::{fmt::Debug, hash::Hash, marker::PhantomData};
 
@@ -20,8 +76,6 @@ use lemon_pdf_derive::PdfFormat;
 
 use crate::array::Array;
 use crate::dictionary::Dictionary;
-use crate::stream::Stream;
-use serde::Serialize;
 
 #[allow(missing_debug_implementations)]
 pub struct Formatter<'a> {
@@ -54,6 +108,7 @@ impl<'a> Write for Formatter<'a> {
     }
 }
 
+/// Writes the entries of a dictionary. Keys are always names.
 #[allow(missing_debug_implementations)]
 #[must_use]
 pub struct DictionaryFormatter<'a, 'b> {
@@ -63,15 +118,14 @@ pub struct DictionaryFormatter<'a, 'b> {
 
 impl<'a, 'b> DictionaryFormatter<'a, 'b> {
     fn new(formatter: &'b mut Formatter<'a>) -> Self {
-        let mut result = Ok(());
-        result = result.and_then(|_| write!(formatter, "<< "));
+        let result = write!(formatter, "<< ");
         DictionaryFormatter { formatter, result }
     }
 
-    pub fn key_value(mut self, key: &dyn PdfFormat, value: &dyn PdfFormat) -> Self {
+    pub fn key_value(mut self, key: &str, value: &dyn PdfFormat) -> Self {
         let formatter = &mut self.formatter;
         self.result = self.result.and_then(|()| {
-            key.write(formatter)?;
+            write_name(formatter, key)?;
             write!(formatter, " ")?;
             value.write(formatter)?;
             writeln!(formatter)?;
@@ -96,8 +150,7 @@ pub struct ArrayFormatter<'a, 'b> {
 
 impl<'a, 'b> ArrayFormatter<'a, 'b> {
     fn new(formatter: &'b mut Formatter<'a>) -> Self {
-        let mut result = Ok(());
-        result = result.and_then(|_| write!(formatter, "[ "));
+        let result = write!(formatter, "[ ");
         ArrayFormatter { formatter, result }
     }
 
@@ -118,43 +171,110 @@ impl<'a, 'b> ArrayFormatter<'a, 'b> {
     }
 }
 
-pub trait PdfFormat: std::fmt::Debug {
+/// A direct object: a value that writes exactly one PDF object and can be nested in arrays and
+/// dictionaries.
+pub trait PdfFormat: Debug {
     fn write(&self, output: &mut Formatter) -> Result<()>;
+}
 
-    /// Whether this object is a stream. Streams can never be stored inside object streams.
-    fn is_stream(&self) -> bool {
-        false
+/// The entries of a dictionary, without the surrounding `<<` and `>>`.
+///
+/// Implemented by dictionary types (derived with `#[derive(PdfFormat)]` or
+/// `#[derive(PdfDictionary)]`) and by maps. Used for the dictionaries of streams and to flatten
+/// one dictionary type into another (`#[flatten]`).
+pub trait PdfDictionary {
+    fn write_entries<'a, 'b>(&self, f: DictionaryFormatter<'a, 'b>)
+        -> DictionaryFormatter<'a, 'b>;
+}
+
+/// An object that can be written as an indirect object (ISO 32000-1, 7.3.10): every direct
+/// object, and streams.
+pub trait IndirectObject: Debug {
+    /// Whether this object is a stream. Streams must be indirect objects, and can not be stored
+    /// in object streams.
+    const IS_STREAM: bool;
+
+    /// Writes the object (without `obj` and `endobj`).
+    fn write_indirect(&self, output: &mut Formatter) -> Result<()>;
+}
+
+impl<T: PdfFormat> IndirectObject for T {
+    const IS_STREAM: bool = false;
+
+    fn write_indirect(&self, output: &mut Formatter) -> Result<()> {
+        self.write(output)
+    }
+}
+
+impl<'a, T: PdfFormat + ?Sized> PdfFormat for &'a T {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        (**self).write(output)
+    }
+}
+
+impl<T: PdfFormat + ?Sized> PdfFormat for Box<T> {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        (**self).write(output)
     }
 }
 
 /// Writes a name object (ISO 32000-1, 7.3.5). Bytes outside of the printable ASCII range,
 /// delimiters and `#` are written as `#` followed by two hexadecimal digits.
-impl<'a> PdfFormat for &'a str {
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        output.write_all(b"/")?;
-        for &byte in self.as_bytes() {
-            match byte {
-                b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#' => {
-                    write!(output, "#{:02X}", byte)?
-                }
-                b'!'..=b'~' => output.write_all(&[byte])?,
-                _ => write!(output, "#{:02X}", byte)?,
+pub fn write_name(output: &mut dyn Write, name: &str) -> Result<()> {
+    output.write_all(b"/")?;
+    for &byte in name.as_bytes() {
+        match byte {
+            b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%' | b'#' => {
+                write!(output, "#{:02X}", byte)?
             }
+            b'!'..=b'~' => output.write_all(&[byte])?,
+            _ => write!(output, "#{:02X}", byte)?,
         }
-        Ok(())
+    }
+    Ok(())
+}
+
+/// A name object (ISO 32000-1, 7.3.5), like `/Type` or `/Helvetica`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Name(Cow<'static, str>);
+
+impl Name {
+    pub const fn from_static(name: &'static str) -> Self {
+        Name(Cow::Borrowed(name))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-impl<'a, T> PdfFormat for &'a T
-where
-    T: PdfFormat,
-{
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        (*self).write(output)
+impl From<&'static str> for Name {
+    fn from(name: &'static str) -> Self {
+        Name(Cow::Borrowed(name))
     }
+}
 
-    fn is_stream(&self) -> bool {
-        (*self).is_stream()
+impl From<String> for Name {
+    fn from(name: String) -> Self {
+        Name(Cow::Owned(name))
+    }
+}
+
+impl AsRef<str> for Name {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PdfFormat for Name {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        write_name(output, &self.0)
     }
 }
 
@@ -164,12 +284,6 @@ impl PdfFormat for bool {
             true => write!(output, "true"),
             false => write!(output, "false"),
         }
-    }
-}
-
-impl PdfFormat for String {
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        <Self as AsRef<str>>::as_ref(self).write(output)
     }
 }
 
@@ -184,7 +298,7 @@ pub struct TextString(pub String);
 impl PdfFormat for TextString {
     fn write(&self, output: &mut Formatter) -> Result<()> {
         if self.0.bytes().all(|byte| byte == b' ' || byte.is_ascii_graphic()) {
-            return self.0.as_bytes().write(output);
+            return write_literal_string(output, self.0.as_bytes());
         }
         write!(output, "<FEFF")?;
         for unit in self.0.encode_utf16() {
@@ -194,12 +308,48 @@ impl PdfFormat for TextString {
     }
 }
 
+/// A string of arbitrary bytes (ISO 32000-1, 7.3.4), like an identifier, an ASCII string such
+/// as a URI, or encoded glyph codes. Use `TextString` for human-readable text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+pub struct ByteString(pub Vec<u8>);
+
+impl From<Vec<u8>> for ByteString {
+    fn from(bytes: Vec<u8>) -> Self {
+        ByteString(bytes)
+    }
+}
+
+impl From<&[u8]> for ByteString {
+    fn from(bytes: &[u8]) -> Self {
+        ByteString(bytes.to_vec())
+    }
+}
+
+impl From<&str> for ByteString {
+    fn from(text: &str) -> Self {
+        ByteString(text.as_bytes().to_vec())
+    }
+}
+
+impl PdfFormat for ByteString {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        write_literal_string(output, &self.0)
+    }
+}
+
+/// Writes `bytes` as a literal string, `(like this)`.
+pub fn write_literal_string(output: &mut dyn Write, bytes: &[u8]) -> Result<()> {
+    write!(output, "(")?;
+    output.write_escaped(bytes)?;
+    write!(output, ")")
+}
+
 pub trait WriteEscaped {
     fn write_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()>;
     fn write_hex_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()>;
 }
 
-impl<W: Write> WriteEscaped for W {
+impl<W: Write + ?Sized> WriteEscaped for W {
     fn write_escaped(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         for &byte in bytes {
             match byte {
@@ -223,20 +373,6 @@ impl<W: Write> WriteEscaped for W {
             write!(self, "{:02X}", byte)?;
         }
         Ok(())
-    }
-}
-
-impl<'a> PdfFormat for &'a [u8] {
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        write!(output, "(")?;
-        output.write_escaped(self)?;
-        write!(output, ")")
-    }
-}
-
-impl PdfFormat for Vec<u8> {
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        <Self as AsRef<[u8]>>::as_ref(self).write(output)
     }
 }
 
@@ -283,40 +419,50 @@ impl PdfFormat for f64 {
     }
 }
 
-impl PdfFormat for u32 {
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        write!(output, "{}", self)
-    }
+macro_rules! impl_integer {
+    ($($ty:ty),*) => {
+        $(
+            impl PdfFormat for $ty {
+                fn write(&self, output: &mut Formatter) -> Result<()> {
+                    write!(output, "{}", self)
+                }
+            }
+        )*
+    };
 }
 
-impl PdfFormat for usize {
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        write!(output, "{}", self)
-    }
-}
+// `u8` is deliberately left out: a `Vec<u8>` would be ambiguous between an array of numbers
+// and a string (use `ByteString`).
+impl_integer!(i32, i64, u16, u32, u64, usize);
 
-impl PdfFormat for i64 {
-    fn write(&self, output: &mut Formatter) -> Result<()> {
-        write!(output, "{}", self)
-    }
-}
-
-#[derive(Debug, From, PdfFormat)]
+/// Any direct object, for when the type of a value is only known at runtime.
+#[derive(Debug, From)]
 pub enum Value {
     Null,
     Boolean(bool),
     Integer(i64),
     Real(f64),
-    String(Vec<u8>),
-    Name(String),
+    String(ByteString),
+    Name(Name),
     Array(Array),
     Dictionary(Dictionary),
-    Stream(Stream),
+    Reference(RawIndirectReference),
 }
 
-impl<'a> From<&'a str> for Value {
-    fn from(from: &'a str) -> Value {
-        Value::Name(from.to_string())
+// Not derived: the derive writes unit variants as names, but `Null` is the null object.
+impl PdfFormat for Value {
+    fn write(&self, f: &mut Formatter) -> Result<()> {
+        match self {
+            Value::Null => write!(f, "null"),
+            Value::Boolean(value) => value.write(f),
+            Value::Integer(value) => value.write(f),
+            Value::Real(value) => value.write(f),
+            Value::String(value) => value.write(f),
+            Value::Name(value) => value.write(f),
+            Value::Array(value) => value.write(f),
+            Value::Dictionary(value) => value.write(f),
+            Value::Reference(value) => value.write(f),
+        }
     }
 }
 
@@ -326,9 +472,15 @@ impl From<f32> for Value {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename = "R")]
+/// An untyped reference to an indirect object, for `Value`.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct RawIndirectReference(pub i64, pub i64);
+
+impl PdfFormat for RawIndirectReference {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        write!(output, "{} {} R", self.0, self.1)
+    }
+}
 
 impl<T> From<IndirectReference<T>> for RawIndirectReference {
     fn from(other: IndirectReference<T>) -> Self {
@@ -336,15 +488,14 @@ impl<T> From<IndirectReference<T>> for RawIndirectReference {
     }
 }
 
-/// A reference to an indirect object.
+/// A reference to an indirect object of type `T`.
 ///
 /// Indirect references to objects can be obtained using `write_object` or
-/// `write_object_fn` on the `Context`.
-#[derive(Serialize)]
-#[serde(into = "RawIndirectReference")]
+/// `create_reference` on the `DocumentContext`. A reference to a variant of an enum converts
+/// into a reference to the enum (`.into()`) if the enum derives `#[indirect_variants]`.
 pub struct IndirectReference<T> {
     raw: RawIndirectReference,
-    _marker: PhantomData<T>,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<T> PartialEq for IndirectReference<T> {
@@ -364,12 +515,6 @@ impl<T> Hash for IndirectReference<T> {
 impl<T> Debug for IndirectReference<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.raw().fmt(f)
-    }
-}
-
-impl<T> Default for IndirectReference<T> {
-    fn default() -> Self {
-        IndirectReference::new(0, 0)
     }
 }
 
@@ -400,6 +545,7 @@ impl<T> IndirectReference<T> {
     /// Converts an indirect reference to point to an object of type `U`.
     ///
     /// This function is to be used with care, else invalid PDF documents may be created.
+    /// Prefer the conversions derived with `#[indirect_variants]`.
     pub fn convert<U>(self) -> IndirectReference<U> {
         IndirectReference::new(self.number(), self.generation())
     }
@@ -411,10 +557,12 @@ impl<T> IndirectReference<T> {
 
 impl<T> PdfFormat for IndirectReference<T> {
     fn write(&self, output: &mut Formatter) -> Result<()> {
-        write!(output, "{} {} R", self.number(), self.generation())
+        self.raw.write(output)
     }
 }
 
+/// `null` for `None`. Dictionary entries of type `Option` are left out instead when deriving
+/// `PdfFormat`.
 impl<T: PdfFormat> PdfFormat for Option<T> {
     fn write(&self, f: &mut Formatter) -> Result<()> {
         match self {
@@ -424,6 +572,9 @@ impl<T: PdfFormat> PdfFormat for Option<T> {
     }
 }
 
+/// A direct object, or a reference to an indirect object of the same type. Only implements
+/// `PdfFormat` for direct objects, so a stream can only be referred to with an
+/// `IndirectReference`.
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 pub enum Object<T> {
     Direct(T),
@@ -497,31 +648,50 @@ mod test {
 
     #[test]
     fn plain_names_are_written_unchanged() {
-        assert_eq!(written(&"Type"), "/Type");
-        assert_eq!(written(&"F0"), "/F0");
-        assert_eq!(written(&"A;B-C_D.E*F!G~"), "/A;B-C_D.E*F!G~");
-        assert_eq!(written(&""), "/");
+        assert_eq!(written(&Name::from("Type")), "/Type");
+        assert_eq!(written(&Name::from("F0")), "/F0");
+        assert_eq!(written(&Name::from("A;B-C_D.E*F!G~")), "/A;B-C_D.E*F!G~");
+        assert_eq!(written(&Name::from("")), "/");
     }
 
     #[test]
     fn special_characters_in_names_are_escaped() {
-        assert_eq!(written(&"My Font"), "/My#20Font");
-        assert_eq!(written(&"a#b"), "/a#23b");
-        assert_eq!(written(&"a/b"), "/a#2Fb");
-        assert_eq!(written(&"()<>[]{}%"), "/#28#29#3C#3E#5B#5D#7B#7D#25");
-        assert_eq!(written(&"tab\there"), "/tab#09here");
-        assert_eq!(written(&"ü"), "/#C3#BC");
-        assert_eq!(written(&"x\x7f"), "/x#7F");
-        assert_eq!(written(&String::from("A B")), "/A#20B");
+        assert_eq!(written(&Name::from("My Font")), "/My#20Font");
+        assert_eq!(written(&Name::from("a#b")), "/a#23b");
+        assert_eq!(written(&Name::from("a/b")), "/a#2Fb");
+        assert_eq!(written(&Name::from("()<>[]{}%")), "/#28#29#3C#3E#5B#5D#7B#7D#25");
+        assert_eq!(written(&Name::from("tab\there")), "/tab#09here");
+        assert_eq!(written(&Name::from("ü")), "/#C3#BC");
+        assert_eq!(written(&Name::from("x\x7f")), "/x#7F");
+        assert_eq!(written(&Name::from(String::from("A B"))), "/A#20B");
     }
 
     #[test]
     fn literal_strings_are_escaped() {
-        assert_eq!(written(&&b"plain text"[..]), "(plain text)");
-        assert_eq!(written(&&b"a(b)c\\d"[..]), "(a\\(b\\)c\\\\d)");
-        assert_eq!(written(&&b"\n\r\t\x08\x0c"[..]), "(\\n\\r\\t\\b\\f)");
-        assert_eq!(written(&&b"\x00\x7f\xff"[..]), "(\\000\\177\\377)");
-        assert_eq!(written(&b"%".to_vec()), "(%)");
+        assert_eq!(written(&ByteString(b"plain text".to_vec())), "(plain text)");
+        assert_eq!(written(&ByteString(b"a(b)c\\d".to_vec())), "(a\\(b\\)c\\\\d)");
+        assert_eq!(written(&ByteString(b"\n\r\t\x08\x0c".to_vec())), "(\\n\\r\\t\\b\\f)");
+        assert_eq!(written(&ByteString(b"\x00\x7f\xff".to_vec())), "(\\000\\177\\377)");
+        assert_eq!(written(&ByteString(b"%".to_vec())), "(%)");
+    }
+
+    #[test]
+    fn values_are_written() {
+        let mut dictionary = Dictionary::new();
+        dictionary.insert("B".to_owned(), Box::new(ByteString::from("x")));
+        dictionary.insert("A".to_owned(), Box::new(Name::from("y")));
+        let array: Array = vec![
+            Object::Direct(Value::Null),
+            Object::Direct(Value::from(1.5f32)),
+            Object::Indirect(IndirectReference::new(3, 0)),
+            Object::Direct(Value::Reference(RawIndirectReference(4, 0))),
+        ];
+        assert_eq!(written(&Value::Array(array)), "[ null 1.5 3 0 R 4 0 R ]");
+        // dictionaries are sorted by key
+        assert_eq!(
+            written(&Value::Dictionary(dictionary)),
+            "<< /A /y\n/B (x)\n>>"
+        );
     }
 
     #[test]

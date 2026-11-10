@@ -12,7 +12,7 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::f64::consts::SQRT_2;
 use std::io::Result;
 
@@ -21,13 +21,13 @@ use lemon_pdf_derive::PdfFormat;
 
 use crate::annotation::Annotation;
 use crate::array::Array;
-use crate::content::PageContext;
+use crate::content::{ContentStream, PageContext};
 use crate::document::DocumentContext;
 use crate::font::Font;
 use crate::graphics_state::ExtGState;
 use crate::image::XObject;
-use crate::object::{IndirectReference, Object, Value};
-use crate::stream::{Stream, StreamEncoder, StreamFilter};
+use crate::object::{IndirectReference, Name, Object, Value};
+use crate::stream::{StreamEncoder, StreamFilter};
 use crate::Pt;
 
 /// A node of the page tree with other page tree nodes or pages as its kids.
@@ -35,13 +35,13 @@ use crate::Pt;
 pub struct Pages {
     /// The number of pages (leaf nodes) below this node.
     pub count: i64,
-    #[skip_if("Option::is_none")]
     pub parent: Option<IndirectReference<Pages>>,
     pub kids: Vec<IndirectReference<PageTreeNode>>,
 }
 
 /// A kid of a page tree node.
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[indirect_variants]
 pub enum PageTreeNode {
     Tree(Pages),
     Page(Page),
@@ -56,35 +56,31 @@ impl Pages {
 #[derive(Clone, Debug, Default, PartialEq, PdfFormat)]
 #[omit_type(true)]
 pub struct ResourceDictionary {
-    #[skip_if("HashMap::is_empty")]
-    pub font: HashMap<String, IndirectReference<Font>>,
+    #[skip_if("BTreeMap::is_empty")]
+    pub font: BTreeMap<Name, IndirectReference<Font>>,
     #[rename("XObject")]
-    #[skip_if("HashMap::is_empty")]
-    pub x_object: HashMap<String, IndirectReference<XObject>>,
+    #[skip_if("BTreeMap::is_empty")]
+    pub x_object: BTreeMap<Name, IndirectReference<XObject>>,
     #[rename("ExtGState")]
-    #[skip_if("HashMap::is_empty")]
-    pub ext_g_state: HashMap<String, ExtGState>,
+    #[skip_if("BTreeMap::is_empty")]
+    pub ext_g_state: BTreeMap<Name, ExtGState>,
 }
 
 /// A convenience struct to create PDF pages.
 #[derive(Clone, Debug, PartialEq, PdfFormat)]
 pub struct Page {
-    #[skip_if("Option::is_none")]
     pub resources: Option<ResourceDictionary>,
     pub media_box: [Pt; 4],
     /// The annotations of the page. Only emitted if the vector is not empty.
     #[rename("Annots")]
     #[skip_if("Vec::is_empty")]
     pub annotations: Vec<Object<Annotation>>,
-    #[skip_if("Option::is_none")]
     pub parent: Option<IndirectReference<Pages>>,
-    pub contents: Vec<IndirectReference<Stream>>,
+    pub contents: Vec<IndirectReference<ContentStream>>,
     /// The key of the page in the parent tree of the structure tree (tagged PDF).
-    #[skip_if("Option::is_none")]
     pub struct_parents: Option<i64>,
     /// The tab order of the annotations; `S` follows the structure tree.
-    #[skip_if("Option::is_none")]
-    pub tabs: Option<String>,
+    pub tabs: Option<Name>,
 }
 impl Page {
     pub fn new() -> Self {

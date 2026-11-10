@@ -12,71 +12,40 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::{BTreeMap, HashMap};
-use std::hash::Hash;
+use std::collections::BTreeMap;
 use std::io::Result;
-use std::ops::Deref;
 
-use crate::object::{Formatter, PdfFormat};
+use crate::object::{DictionaryFormatter, Formatter, PdfDictionary, PdfFormat};
 
-pub type Dictionary = HashMap<String, Box<dyn PdfFormat>>;
+/// A dictionary whose entries are only known at runtime. Typed dictionaries are structs that
+/// derive `PdfFormat` instead.
+///
+/// Maps are `BTreeMap`s so that the entries are written in a deterministic order. The keys are
+/// written as names.
+pub type Dictionary = BTreeMap<String, Box<dyn PdfFormat>>;
 
-trait Helper {
-    fn as_trait(&self) -> &dyn PdfFormat;
-}
-
-impl<T: PdfFormat + Sized> Helper for T {
-    fn as_trait(&self) -> &dyn PdfFormat {
-        self as &dyn PdfFormat
-    }
-}
-
-impl Helper for &dyn PdfFormat {
-    fn as_trait(&self) -> &dyn PdfFormat {
-        *self
-    }
-}
-
-impl<T, U, S> PdfFormat for HashMap<T, U, S>
+impl<K, V> PdfDictionary for BTreeMap<K, V>
 where
-    T: PdfFormat + Eq + Hash,
-    U: PdfFormat,
-    S: std::hash::BuildHasher,
+    K: AsRef<str> + Ord,
+    V: PdfFormat,
+{
+    fn write_entries<'a, 'b>(
+        &self,
+        mut f: DictionaryFormatter<'a, 'b>,
+    ) -> DictionaryFormatter<'a, 'b> {
+        for (key, value) in self {
+            f = f.key_value(key.as_ref(), value);
+        }
+        f
+    }
+}
+
+impl<K, V> PdfFormat for BTreeMap<K, V>
+where
+    K: AsRef<str> + Ord + std::fmt::Debug,
+    V: PdfFormat,
 {
     fn write(&self, f: &mut Formatter) -> Result<()> {
-        let mut dict_fmt = f.format_dictionary();
-        for (key, value) in self.iter() {
-            dict_fmt = dict_fmt.key_value(key, value);
-        }
-        dict_fmt.finish()
-    }
-}
-
-impl<T, S> PdfFormat for HashMap<T, Box<dyn PdfFormat>, S>
-where
-    T: PdfFormat + Eq + Hash,
-    S: std::hash::BuildHasher,
-{
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        let mut dict_fmt = f.format_dictionary();
-        for (key, value) in self.iter() {
-            dict_fmt = dict_fmt.key_value(key, value.deref());
-        }
-        dict_fmt.finish()
-    }
-}
-
-/// A dictionary with its entries in a deterministic (sorted) order.
-impl<T, U> PdfFormat for BTreeMap<T, U>
-where
-    T: PdfFormat + Ord,
-    U: PdfFormat,
-{
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        let mut dict_fmt = f.format_dictionary();
-        for (key, value) in self.iter() {
-            dict_fmt = dict_fmt.key_value(key, value);
-        }
-        dict_fmt.finish()
+        self.write_entries(f.format_dictionary()).finish()
     }
 }

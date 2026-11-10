@@ -9,7 +9,7 @@ use super::{
     encoding, FontType, FontUnit,
 };
 use crate::document::DocumentContext;
-use crate::object::{IndirectReference};
+use crate::object::{ByteString, IndirectReference, Name};
 
 #[derive(Debug, Copy, Clone)]
 pub struct BuiltInFontMetrics {
@@ -64,29 +64,29 @@ include!(concat!(env!("OUT_DIR"), "/base_14_fonts.rs"));
 
 use crate as lemon_pdf;
 
-#[derive(Debug, Clone, PartialEq, Default, PdfFormat)]
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
 #[rename("Font")]
 pub struct SimpleFont {
     pub subtype: FontType,
-    pub base_font: String,
-    #[skip_if("Option::is_none")]
+    pub base_font: Name,
     pub first_char: Option<usize>,
-    #[skip_if("Option::is_none")]
     pub last_char: Option<usize>,
     #[skip_if("Vec::is_empty")]
     pub widths: Vec<FontUnit>,
-    #[skip_if("Option::is_none")]
     pub font_descriptor: Option<IndirectReference<FontDescriptor>>,
-    #[skip_if("Option::is_none")]
     pub encoding: Option<encoding::EncodingEntry>,
 }
 
 impl SimpleFont {
-    pub fn create_with_base_name(name: String, subtype: FontType) -> Self {
+    pub fn create_with_base_name(name: Name, subtype: FontType) -> Self {
         SimpleFont {
             subtype,
             base_font: name,
-            ..Default::default()
+            first_char: None,
+            last_char: None,
+            widths: Vec::new(),
+            font_descriptor: None,
+            encoding: None,
         }
     }
 }
@@ -110,8 +110,7 @@ impl BuiltInFont {
         };
 
         let font_descriptor = FontDescriptor {
-            font_name: metrics.font_name.to_string(),
-            font_family: metrics.family_name.as_bytes().to_owned(),
+            font_family: Some(ByteString::from(metrics.family_name)),
             font_b_box: metrics.font_bbox,
             cap_height: metrics.cap_height,
             italic_angle: metrics.italic_angle,
@@ -121,16 +120,13 @@ impl BuiltInFont {
             ascent: metrics.ascender,
             descent: metrics.descender,
             flags,
-            ..Default::default()
+            ..FontDescriptor::new(Name::from(metrics.font_name))
         };
         let font_descriptor = context.write_object(font_descriptor)?;
 
-        Ok(SimpleFont {
-            subtype: FontType::Type1,
-            base_font: metrics.font_name.to_string(),
-            font_descriptor: Some(font_descriptor),
-            ..Default::default()
-        })
+        let mut font = SimpleFont::create_with_base_name(Name::from(metrics.font_name), FontType::Type1);
+        font.font_descriptor = Some(font_descriptor);
+        Ok(font)
     }
 }
 

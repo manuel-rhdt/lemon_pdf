@@ -1,5 +1,5 @@
 use crate as lemon_pdf;
-use crate::object::Object;
+use crate::object::{Name, Object};
 use lemon_pdf_derive::PdfFormat;
 
 use std::convert::TryFrom;
@@ -80,10 +80,16 @@ impl EncodingEntry {
 
 #[derive(Debug, Default, Clone, PartialEq, PdfFormat)]
 pub struct Encoding {
-    #[skip_if("Option::is_none")]
     pub base_encoding: Option<PredefinedEncoding>,
-    #[skip_if("Option::is_none")]
-    pub differences: Option<Object<Vec<usize>>>,
+    pub differences: Option<Object<Vec<Difference>>>,
+}
+
+/// An element of the `Differences` array of an encoding (ISO 32000-1, 9.6.6.1): a character
+/// code, followed by the names of the glyphs for that code and the codes after it.
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
+pub enum Difference {
+    Code(u32),
+    GlyphName(Name),
 }
 
 pub const EXPERT_ENCODING: [&str; 256] = [
@@ -1661,3 +1667,33 @@ pub const ZAPF_DINGBATS_ENCODING: [&str; 256] = [
     "", "a201", "a183", "a184", "a197", "a185", "a194", "a198", "a186", "a195", "a187", "a188",
     "a189", "a190", "a191", "",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::{Formatter, PdfFormat};
+
+    #[test]
+    fn differences_mix_codes_and_glyph_names() {
+        let encoding = Encoding {
+            base_encoding: Some(PredefinedEncoding::WinAnsiEncoding),
+            differences: Some(Object::Direct(vec![
+                Difference::Code(39),
+                Difference::GlyphName(Name::from("quotesingle")),
+                Difference::Code(96),
+                Difference::GlyphName(Name::from("grave")),
+            ])),
+        };
+        let mut buffer = Vec::new();
+        encoding
+            .write(&mut Formatter {
+                writer: &mut buffer,
+            })
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(buffer).unwrap(),
+            "<< /Type /Encoding\n/BaseEncoding /WinAnsiEncoding\n\
+             /Differences [ 39 /quotesingle 96 /grave ]\n>>"
+        );
+    }
+}

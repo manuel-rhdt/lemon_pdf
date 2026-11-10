@@ -14,59 +14,30 @@
 
 use std::io::Result;
 
-use crate::object::{Formatter, PdfFormat, Value, Object};
+use crate::object::{Formatter, Object, PdfFormat, Value};
 
-/// An Array of `PdfObject`s.
+/// An array whose elements are only known at runtime. Typed arrays are `Vec<T>`, `[T]` or
+/// `[T; N]` of a type `T` that implements `PdfFormat`.
 pub type Array = Vec<Object<Value>>;
+
+impl<T: PdfFormat> PdfFormat for [T] {
+    fn write(&self, f: &mut Formatter) -> Result<()> {
+        let mut array_formatter = f.format_array();
+        for obj in self.iter() {
+            array_formatter = array_formatter.value(obj);
+        }
+        array_formatter.finish()
+    }
+}
 
 impl<T: PdfFormat> PdfFormat for Vec<T> {
     fn write(&self, f: &mut Formatter) -> Result<()> {
-        let mut array_formatter = f.format_array();
-        for obj in self.iter() {
-            array_formatter = array_formatter.value(obj);
-        }
-        array_formatter.finish()
+        self.as_slice().write(f)
     }
 }
 
-impl<T: PdfFormat> PdfFormat for &[T] {
+impl<T: PdfFormat, const N: usize> PdfFormat for [T; N] {
     fn write(&self, f: &mut Formatter) -> Result<()> {
-        let mut array_formatter = f.format_array();
-        for obj in self.iter() {
-            array_formatter = array_formatter.value(obj);
-        }
-        array_formatter.finish()
+        self[..].write(f)
     }
 }
-
-macro_rules! impl_array {
-    ($num:expr) => {
-        impl<T: PdfFormat> PdfFormat for [T; $num] {
-            fn write(&self, f: &mut Formatter) -> Result<()> {
-                let mut array_formatter = f.format_array();
-                for obj in self.iter() {
-                    array_formatter = array_formatter.value(obj);
-                }
-                array_formatter.finish()
-            }
-        }
-    }
-}
-
-impl_array!(0);
-impl_array!(1);
-impl_array!(2);
-impl_array!(3);
-impl_array!(4);
-impl_array!(5);
-impl_array!(6);
-impl_array!(7);
-impl_array!(8);
-impl_array!(9);
-impl_array!(10);
-impl_array!(11);
-impl_array!(12);
-impl_array!(13);
-impl_array!(14);
-impl_array!(15);
-impl_array!(16);

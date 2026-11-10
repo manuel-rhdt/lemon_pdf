@@ -17,7 +17,8 @@ use lemon_pdf::graphics_state::{BlendMode, FillRule, LineCap, LineJoin};
 use lemon_pdf::image::Image;
 use lemon_pdf::font::encoding::{EncodingEntry, PredefinedEncoding};
 use lemon_pdf::font::Font;
-use lemon_pdf::object::TextString;
+use lemon_pdf::dictionary::Dictionary;
+use lemon_pdf::object::{ByteString, Name, TextString};
 use lemon_pdf::stream::{Stream, StreamFilter};
 use lemon_pdf::structure_tree::{
     NumberTree, StructElem, StructParent, StructTreeRoot, StructType,
@@ -427,7 +428,7 @@ fn many_objects_are_split_over_several_object_streams() {
 #[test]
 fn large_object_stream_is_flushed_by_size() {
     // a single object of more than 256 KiB fills an object stream on its own
-    let big = vec![b'x'; 300 * 1024];
+    let big = ByteString(vec![b'x'; 300 * 1024]);
     let (bytes, document) = build_and_load(true, |context| {
         let reference = context.write_object(big.clone()).unwrap();
         let small = context.write_object(1i64).unwrap();
@@ -533,7 +534,7 @@ fn link_annotation_is_attached_to_page() {
             let link = LinkAnnotation::new(
                 [Pt(10.0), Pt(10.0), Pt(110.0), Pt(30.0)],
                 LinkAction::Uri(UriAction {
-                    uri: b"https://example.com/a(b)".to_vec(),
+                    uri: ByteString::from("https://example.com/a(b)"),
                 }),
             );
             page.add_annotation(context, Annotation::Link(link)).unwrap();
@@ -556,8 +557,9 @@ fn names_with_special_characters_round_trip() {
     for &mode in &MODES {
         let mut stream_ref = None;
         let (_, document) = build_and_load(mode, |context| {
-            let mut stream = Stream::with_bytes(b"data".to_vec(), None);
-            stream.add_key_value("My Key".to_owned(), Box::new("a/b#c (d)"));
+            let mut dict = Dictionary::new();
+            dict.insert("My Key".to_owned(), Box::new(Name::from("a/b#c (d)")));
+            let stream = Stream::new(dict, b"data".to_vec());
             stream_ref = Some(context.write_object(stream).unwrap());
         });
         let stream_ref = stream_ref.unwrap();

@@ -13,7 +13,8 @@
 //    limitations under the License.
 
 use crate as lemon_pdf;
-use lemon_pdf_derive::PdfFormat;
+use crate::stream::Stream;
+use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 
 pub mod builtin;
 pub mod descriptor;
@@ -21,10 +22,20 @@ pub mod encoding;
 pub mod type0;
 
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[indirect_variants]
 pub enum Font {
     Simple(builtin::SimpleFont),
     Composite(type0::CompositeFont),
 }
+
+/// The dictionary of a CMap stream that maps character codes to Unicode (`ToUnicode`,
+/// ISO 32000-1, 9.10.3).
+#[derive(Debug, Default, Clone, PartialEq, PdfDictionary)]
+#[omit_type(true)]
+pub struct ToUnicodeCMapDict {}
+
+/// A CMap that maps character codes to Unicode, for text extraction.
+pub type ToUnicodeCMap = Stream<ToUnicodeCMapDict>;
 
 /// A postscript font unit (1/1000 of an EM)
 #[derive(Debug, Default, Copy, Clone, PartialEq, PartialOrd, PdfFormat)]

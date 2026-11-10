@@ -23,15 +23,13 @@
 //! with the `image` crate) and passed as raw pixels.
 
 use std::fmt;
-use std::io::{Result, Write};
-
-use flate2::write::ZlibEncoder;
-use flate2::Compression;
+use std::io::Result;
 
 use crate as lemon_pdf;
-use crate::object::{Formatter, IndirectReference, PdfFormat};
+use crate::object::IndirectReference;
+use crate::stream::{Filter, Stream};
 use crate::DocumentContext;
-use lemon_pdf_derive::PdfFormat;
+use lemon_pdf_derive::{IndirectObject, PdfDictionary, PdfFormat};
 
 /// The color spaces images can use.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PdfFormat)]
@@ -291,109 +289,74 @@ impl Image {
 
 /// An external object (ISO 32000-1, 8.8): a self-contained graphic that pages paint with the
 /// `Do` operator.
-#[derive(Debug)]
+///
+/// References to the variants convert into references to `XObject` (`.into()`).
+#[derive(Debug, IndirectObject)]
+#[indirect_variants]
 pub enum XObject {
     Image(ImageXObject),
 }
 
-impl PdfFormat for XObject {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        match self {
-            XObject::Image(image) => image.write(f),
-        }
-    }
-
-    fn is_stream(&self) -> bool {
-        true
-    }
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
-/// The encoded stream of an image XObject.
-pub struct ImageXObject {
-    width: u32,
-    height: u32,
-    color_space: ColorSpace,
-    bits_per_component: u32,
-    filter: &'static str,
-    decode: Option<Vec<f64>>,
-    interpolate: bool,
-    soft_mask: Option<IndirectReference<XObject>>,
-    bytes: Vec<u8>,
+/// The dictionary of an image XObject (ISO 32000-1, 8.9.5).
+///
+/// `Image` and `DocumentContext::write_image` create image XObjects whose data matches the
+/// dictionary.
+#[derive(Debug, Clone, PartialEq, PdfDictionary)]
+#[rename("XObject")]
+#[constant(Subtype = "Image")]
+pub struct ImageDict {
+    pub width: u32,
+    pub height: u32,
+    pub color_space: ColorSpace,
+    pub bits_per_component: u32,
+    /// Maps the samples to the range of the color components, two numbers per component.
+    pub decode: Option<Vec<f64>>,
+    /// Asks the reader to smooth the image when it is scaled up.
+    #[skip_if(is_false)]
+    pub interpolate: bool,
+    /// The alpha channel.
+    #[rename("SMask")]
+    pub soft_mask: Option<IndirectReference<SoftMask>>,
 }
 
-impl fmt::Debug for ImageXObject {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ImageXObject")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("color_space", &self.color_space)
-            .field("bits_per_component", &self.bits_per_component)
-            .field("filter", &self.filter)
-            .field("soft_mask", &self.soft_mask)
-            .field("length", &self.bytes.len())
-            .finish()
-    }
+/// An image XObject.
+pub type ImageXObject = Stream<ImageDict>;
+
+/// The dictionary of a soft mask image (ISO 32000-1, 11.6.5.3): a grayscale image whose
+/// samples are the opacity of the pixels of the image it belongs to.
+#[derive(Debug, Clone, PartialEq, PdfDictionary)]
+#[rename("XObject")]
+#[constant(Subtype = "Image", ColorSpace = "DeviceGray")]
+pub struct SoftMaskDict {
+    pub width: u32,
+    pub height: u32,
+    pub bits_per_component: u32,
+    #[skip_if(is_false)]
+    pub interpolate: bool,
 }
 
-impl PdfFormat for ImageXObject {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        let mut dict = f
-            .format_dictionary()
-            .key_value(&"Type", &"XObject")
-            .key_value(&"Subtype", &"Image")
-            .key_value(&"Width", &self.width)
-            .key_value(&"Height", &self.height)
-            .key_value(&"ColorSpace", &self.color_space)
-            .key_value(&"BitsPerComponent", &self.bits_per_component)
-            .key_value(&"Filter", &self.filter)
-            .key_value(&"Length", &self.bytes.len());
-        if let Some(decode) = &self.decode {
-            dict = dict.key_value(&"Decode", decode);
-        }
-        if self.interpolate {
-            dict = dict.key_value(&"Interpolate", &true);
-        }
-        if let Some(soft_mask) = &self.soft_mask {
-            dict = dict.key_value(&"SMask", soft_mask);
-        }
-        dict.finish()?;
-        write!(f, "\nstream\n")?;
-        f.write_all(&self.bytes)?;
-        write!(f, "\nendstream")
-    }
-
-    fn is_stream(&self) -> bool {
-        true
-    }
-}
-
-fn deflate(bytes: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(bytes)?;
-    encoder.finish()
-}
+/// A soft mask image, the alpha channel of an image XObject.
+pub type SoftMask = Stream<SoftMaskDict>;
 
 impl<'a> DocumentContext<'a> {
     /// Writes an image (and its alpha channel as a soft mask) to the document. The returned
     /// reference can be added to any number of pages with `PageContext::add_xobject`.
-    pub fn write_image(&mut self, image: Image) -> Result<IndirectReference<XObject>> {
+    pub fn write_image(&mut self, image: Image) -> Result<IndirectReference<ImageXObject>> {
         let soft_mask = match &image.alpha {
-            Some(alpha) => Some(self.write_object(XObject::Image(ImageXObject {
-                width: image.width,
-                height: image.height,
-                color_space: ColorSpace::DeviceGray,
-                bits_per_component: 8,
-                filter: "FlateDecode",
-                decode: None,
-                interpolate: image.interpolate,
-                soft_mask: None,
-                bytes: deflate(alpha)?,
-            }))?),
+            Some(alpha) => {
+                let dict = SoftMaskDict {
+                    width: image.width,
+                    height: image.height,
+                    bits_per_component: 8,
+                    interpolate: image.interpolate,
+                };
+                Some(self.write_object(Stream::deflated(dict, alpha)?)?)
+            }
             None => None,
-        };
-        let (filter, bytes) = match image.data {
-            ImageData::Raw(samples) => ("FlateDecode", deflate(&samples)?),
-            ImageData::Jpeg(jpeg) => ("DCTDecode", jpeg),
         };
         let decode = if image.inverted {
             Some(
@@ -404,17 +367,20 @@ impl<'a> DocumentContext<'a> {
         } else {
             None
         };
-        self.write_object(XObject::Image(ImageXObject {
+        let dict = ImageDict {
             width: image.width,
             height: image.height,
             color_space: image.color_space,
             bits_per_component: image.bits_per_component,
-            filter,
             decode,
             interpolate: image.interpolate,
             soft_mask,
-            bytes,
-        }))
+        };
+        let stream = match image.data {
+            ImageData::Raw(samples) => Stream::deflated(dict, &samples)?,
+            ImageData::Jpeg(jpeg) => Stream::with_encoded_data(dict, Filter::DCTDecode, jpeg),
+        };
+        self.write_object(stream)
     }
 }
 

@@ -16,8 +16,11 @@ use std::io::{Result, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::document::{DocumentContext, DocumentCatalog, DocumentInfo};
-use crate::object::{Formatter, IndirectReference, PdfFormat};
+use crate as lemon_pdf;
+use crate::document::{DocumentCatalog, DocumentContext, DocumentInfo};
+use crate::object::{Formatter, IndirectObject, IndirectReference, PdfFormat};
+use crate::stream::Stream;
+use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 
 #[derive(Debug, Clone)]
 struct HexString(String);
@@ -56,6 +59,29 @@ fn get_digest(file_len: u64) -> HexString {
     HexString(format!("{:032x}", fnv1a_128(&input)))
 }
 
+/// The trailer dictionary (ISO 32000-1, 7.5.5).
+#[derive(Debug, PdfFormat)]
+#[omit_type(true)]
+struct TrailerDictionary {
+    /// One more than the highest object number.
+    size: usize,
+    root: IndirectReference<DocumentCatalog>,
+    info: Option<IndirectReference<DocumentInfo>>,
+    #[rename("ID")]
+    id: [HexString; 2],
+}
+
+/// The dictionary of a cross-reference stream (ISO 32000-1, 7.5.8): the entries of the trailer
+/// dictionary and the layout of the cross-reference data.
+#[derive(Debug, PdfDictionary)]
+#[rename("XRef")]
+struct XRefStreamDict {
+    #[flatten]
+    trailer: TrailerDictionary,
+    /// The widths of the fields of a cross-reference entry in bytes.
+    w: [usize; 3],
+}
+
 pub struct Trailer {
     pub crossref_offset: u32,
     pub(crate) document_catalog: IndirectReference<DocumentCatalog>,
@@ -63,58 +89,45 @@ pub struct Trailer {
 }
 
 impl Trailer {
+    fn dictionary(&self, size: usize, file_len: u64) -> TrailerDictionary {
+        let digest = get_digest(file_len);
+        TrailerDictionary {
+            size,
+            root: self.document_catalog,
+            info: self.document_info,
+            id: [digest.clone(), digest],
+        }
+    }
+
     /// Writes the cross-reference information as a cross-reference stream (PDF 1.5).
     pub(crate) fn write_xref_stream(&mut self, context: &mut DocumentContext) -> Result<()> {
-        use crate::stream::{Stream, StreamFilter};
-        use flate2::{write::ZlibEncoder, Compression};
-
         let offset = context.current_offset();
         // the xref stream is an object itself
         let num = context.crossref.add_entry(offset, 0);
         let (data, width) = context.crossref.stream_data();
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&data)?;
-        let mut stream = Stream::with_bytes(encoder.finish()?, Some(StreamFilter::Deflate));
-
-        let digest = get_digest(offset);
-        stream.add_key_value("Type".to_owned(), Box::new("XRef"));
-        stream.add_key_value("Size".to_owned(), Box::new(i64::from(num) + 1));
-        stream.add_key_value("W".to_owned(), Box::new([1i64, width as i64, 2]));
-        stream.add_key_value("Root".to_owned(), Box::new(self.document_catalog));
-        if let Some(info) = self.document_info {
-            stream.add_key_value("Info".to_owned(), Box::new(info));
-        }
-        stream.add_key_value("ID".to_owned(), Box::new([digest.clone(), digest]));
+        let dict = XRefStreamDict {
+            trailer: self.dictionary(num as usize + 1, offset),
+            w: [1, width, 2],
+        };
+        let stream = Stream::deflated(dict, &data)?;
 
         writeln!(context.output, "{} 0 obj", num)?;
         let mut formatter = Formatter {
             writer: &mut context.output,
         };
-        stream.write(&mut formatter)?;
+        stream.write_indirect(&mut formatter)?;
         write!(context.output, "\nendobj\n")?;
         write!(context.output, "startxref\n{}\n%%EOF\n", offset)
     }
 
     pub(crate) fn write(&mut self, context: &mut DocumentContext) -> Result<()> {
         writeln!(context.output, "trailer")?;
-        let digest = get_digest(context.current_offset());
-
-        let mut formatter = Formatter {
+        let size = context.crossref.len() as usize + 1;
+        let dictionary = self.dictionary(size, context.current_offset());
+        dictionary.write(&mut Formatter {
             writer: &mut context.output,
-        };
-        let mut formatter = formatter
-            .format_dictionary()
-            .key_value(&"Size", &(context.crossref.len() + 1))
-            .key_value(&"Root", &self.document_catalog)
-            .key_value(&"ID", &[digest.clone(), digest]);
-
-        if let Some(document_info) = self.document_info {
-            formatter = formatter.key_value(&"Info", &document_info);
-        }
-        formatter.finish()?;
-
+        })?;
         write!(context.output, "\nstartxref\n{}\n", self.crossref_offset)?;
-
         writeln!(context.output, "%%EOF")?;
         Ok(())
     }
@@ -141,8 +154,7 @@ mod tests {
     #[test]
     fn digests_differ_for_documents_written_at_once() {
         // same file length and (possibly) the same timestamp: the counter must tell them apart
-        let digests: std::collections::HashSet<_> =
-            (0..100).map(|_| get_digest(1000).0).collect();
+        let digests: std::collections::HashSet<_> = (0..100).map(|_| get_digest(1000).0).collect();
         assert_eq!(digests.len(), 100);
     }
 }

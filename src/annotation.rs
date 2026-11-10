@@ -17,8 +17,8 @@ use std::io::Result;
 use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat;
 
-use crate::object::{Formatter, PdfFormat, TextString};
-use crate::Pt;
+use crate::object::{ByteString, Formatter, IndirectReference, Name, PdfFormat, TextString};
+use crate::{Page, Pt};
 
 /// An action that associates a resource (such as a URL) with an annotation.
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
@@ -27,7 +27,7 @@ use crate::Pt;
 pub struct UriAction {
     /// The URI to open when the annotation is activated (an ASCII string).
     #[rename("URI")]
-    pub uri: Vec<u8>,
+    pub uri: ByteString,
 }
 
 /// An action that jumps to a destination within the document.
@@ -43,8 +43,9 @@ pub struct GoToAction {
 /// A destination inside the document with a layouted point to jump to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Destination {
-    /// The page number (zero-based index), as a PDF page label.
-    pub page_index: u32,
+    /// The page. Use `DocumentContext::create_reference` and `add_reserved_page` to refer to a
+    /// page that is not written yet.
+    pub page: IndirectReference<Page>,
     /// The coordinates on the page.
     pub point: (Pt, Pt),
 }
@@ -55,13 +56,14 @@ impl PdfFormat for Destination {
         let top = self.point.1;
         // [page /XYZ left top null]
         let left = self.point.0;
-        let null_name: Option<&str> = None;
+        // a zoom of `null` keeps the current zoom
+        let zoom: Option<f64> = None;
         f.format_array()
-            .value(&self.page_index)
-            .value(&"XYZ")
+            .value(&self.page)
+            .value(&Name::from("XYZ"))
             .value(&left)
             .value(&top)
-            .value(&null_name)
+            .value(&zoom)
             .finish()
     }
 }
@@ -88,10 +90,8 @@ pub struct LinkAnnotation {
     #[rename("A")]
     pub action: LinkAction,
     /// A description of the link for assistive technology.
-    #[skip_if("Option::is_none")]
     pub contents: Option<TextString>,
     /// The key of the annotation in the parent tree of the structure tree (tagged PDF).
-    #[skip_if("Option::is_none")]
     pub struct_parent: Option<i64>,
 }
 
@@ -110,6 +110,7 @@ impl LinkAnnotation {
 
 /// An annotation attached to a page.
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[indirect_variants]
 pub enum Annotation {
     Link(LinkAnnotation),
 }

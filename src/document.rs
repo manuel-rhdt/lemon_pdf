@@ -12,24 +12,22 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::io::prelude::*;
 use std::io::Error;
 
-use serde::Serialize;
-
-use lemon_pdf_derive::PdfFormat;
+use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 use crate as lemon_pdf;
 
 use crate::crossref::CrossRef;
-use crate::object::{Formatter, IndirectReference, PdfFormat, RawIndirectReference, Object, TextString};
+use crate::object::{Formatter, IndirectObject, IndirectReference, RawIndirectReference, TextString};
 use crate::pagetree::{Page, Pages};
-use crate::serializer::PdfSerializer;
+use crate::stream::Stream;
 use crate::{structure_tree::StructTreeRoot, trailer::Trailer};
 use log::error;
 
 /// The document information dictionary, like `Title`, `Author` or `Subject`.
-pub type DocumentInfo = HashMap<String, TextString>;
+pub type DocumentInfo = BTreeMap<String, TextString>;
 
 #[derive(Debug, Copy, Clone)]
 pub enum Version {
@@ -93,18 +91,24 @@ where
     }
 }
 
-#[derive(Debug, PdfFormat, Default)]
+#[derive(Debug, PdfFormat)]
 #[rename("Catalog")]
 pub(crate) struct DocumentCatalog {
     pages: IndirectReference<Pages>,
-    #[skip_if("Option::is_none")]
-    struct_tree_root: Option<Object<StructTreeRoot>>,
-    #[skip_if("Option::is_none")]
+    struct_tree_root: Option<IndirectReference<StructTreeRoot>>,
     mark_info: Option<MarkInfo>,
-    #[skip_if("Option::is_none")]
     lang: Option<TextString>,
-    #[skip_if("Option::is_none")]
     viewer_preferences: Option<ViewerPreferences>,
+}
+
+/// The dictionary of an object stream (ISO 32000-1, 7.5.7).
+#[derive(Debug, PdfDictionary)]
+#[rename("ObjStm")]
+struct ObjectStreamDict {
+    /// The number of objects in the stream.
+    n: usize,
+    /// The offset of the first object in the decoded data.
+    first: usize,
 }
 
 /// Whether the document is a tagged PDF.
@@ -174,7 +178,10 @@ impl<'a> DocumentContext<'a> {
         };
         context.document_catalog = Some(DocumentCatalog {
             pages: context.create_reference(),
-            ..Default::default()
+            struct_tree_root: None,
+            mark_info: None,
+            lang: None,
+            viewer_preferences: None,
         });
         context.start_pdf()?;
         Ok(context)
@@ -186,17 +193,8 @@ impl<'a> DocumentContext<'a> {
         Ok(())
     }
 
-    pub fn write_object1<T: serde::Serialize>(
-        &mut self,
-        object: T,
-    ) -> Result<IndirectReference<T>, Error> {
-        let reference = self.create_reference();
-        self.write_referenced_object(reference, object)?;
-        Ok(reference)
-    }
-
-    /// Creates a reference for an object that is written later with `write_referenced_object`
-    /// or `write_reserved_object`, so that other objects can refer to it before it exists.
+    /// Creates a reference for an object that is written later with `write_reserved_object`, so
+    /// that other objects can refer to it before it exists.
     pub fn create_reference<T>(&mut self) -> IndirectReference<T> {
         let num = self.crossref.add_entry(0, 0);
         let reference = IndirectReference::new(i64::from(num), 0);
@@ -204,37 +202,15 @@ impl<'a> DocumentContext<'a> {
         reference
     }
 
-    pub fn write_referenced_object<T: serde::Serialize>(
-        &mut self,
-        reference: IndirectReference<T>,
-        object: T,
-    ) -> Result<(), Error> {
-        self.dangling_references.remove(&reference.raw());
-        // update placeholder entry in crossref
-        self.crossref.get_entry_mut(reference.number() as u32).0 = self.output.offset();
-
-        let mut serializer = PdfSerializer {
-            output: &mut self.output,
-        };
-
-        #[derive(Serialize)]
-        #[serde(rename = "obj")]
-        struct Obj(i64, i64);
-
-        Obj(reference.number(), reference.generation())
-            .serialize(&mut serializer)
-            .unwrap();
-        object.serialize(&mut serializer).unwrap();
-        write!(self.output, "\nendobj\n")?;
-        Ok(())
-    }
-
     /// Write an indirect object to the context and return an indirect reference to it.
-    pub fn write_object<T: PdfFormat>(&mut self, object: T) -> Result<IndirectReference<T>, Error> {
+    pub fn write_object<T: IndirectObject>(
+        &mut self,
+        object: T,
+    ) -> Result<IndirectReference<T>, Error> {
         self.write_object_fn(|_, _| Ok(object))
     }
 
-    pub fn write_object_fn<T: PdfFormat>(
+    pub fn write_object_fn<T: IndirectObject>(
         &mut self,
         fun: impl FnOnce(&mut Self, IndirectReference<T>) -> Result<T, Error>,
     ) -> Result<IndirectReference<T>, Error> {
@@ -247,16 +223,15 @@ impl<'a> DocumentContext<'a> {
         Ok(reference)
     }
 
-    fn write_indirect_object(
+    fn write_indirect_object<T: IndirectObject>(
         &mut self,
-        object: impl PdfFormat,
+        object: T,
         reference: RawIndirectReference,
     ) -> Result<(), Error> {
         let mut bytes = Vec::new();
-        object.write(&mut Formatter { writer: &mut bytes })?;
+        object.write_indirect(&mut Formatter { writer: &mut bytes })?;
 
-        let looks_like_stream = bytes.windows(8).any(|w| w == b"\nstream\n");
-        if self.object_streams && reference.1 == 0 && !object.is_stream() && !looks_like_stream {
+        if self.object_streams && reference.1 == 0 && !T::IS_STREAM {
             self.pending_bytes += bytes.len();
             self.pending_objects.push((reference.0 as u32, bytes));
             if self.pending_objects.len() >= OBJECT_STREAM_MAX_OBJECTS
@@ -277,9 +252,6 @@ impl<'a> DocumentContext<'a> {
 
     /// Writes all pending objects into one compressed object stream.
     fn flush_object_stream(&mut self) -> Result<(), Error> {
-        use crate::stream::{Stream, StreamFilter};
-        use flate2::{write::ZlibEncoder, Compression};
-
         if self.pending_objects.is_empty() {
             return Ok(());
         }
@@ -293,13 +265,13 @@ impl<'a> DocumentContext<'a> {
             body.extend_from_slice(bytes);
             body.push(b'\n');
         }
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(header.as_bytes())?;
-        encoder.write_all(&body)?;
-        let mut stream = Stream::with_bytes(encoder.finish()?, Some(StreamFilter::Deflate));
-        stream.add_key_value("Type".to_owned(), Box::new("ObjStm"));
-        stream.add_key_value("N".to_owned(), Box::new(objects.len() as i64));
-        stream.add_key_value("First".to_owned(), Box::new(header.len() as i64));
+        let dict = ObjectStreamDict {
+            n: objects.len(),
+            first: header.len(),
+        };
+        let mut data = header.into_bytes();
+        data.extend_from_slice(&body);
+        let stream = Stream::deflated(dict, &data)?;
 
         let stream_ref = self.write_object(stream)?;
         for (index, (num, _)) in objects.iter().enumerate() {
@@ -325,7 +297,7 @@ impl<'a> DocumentContext<'a> {
     ) -> Result<(), Error> {
         page.set_parent(self.page_tree_reference());
         self.write_reserved_object(reference, page)?;
-        self.page_tree.kids.push(reference.convert());
+        self.page_tree.kids.push(reference.into());
         self.page_tree.count += 1;
         Ok(())
     }
@@ -338,7 +310,7 @@ impl<'a> DocumentContext<'a> {
     }
 
     /// Writes an object to a reference obtained from `create_reference`.
-    pub fn write_reserved_object<T: PdfFormat>(
+    pub fn write_reserved_object<T: IndirectObject>(
         &mut self,
         reference: IndirectReference<T>,
         object: T,
@@ -350,7 +322,7 @@ impl<'a> DocumentContext<'a> {
     /// Sets the root of the structure tree (`/StructTreeRoot`) of the document catalog.
     pub fn set_struct_tree_root(&mut self, root: IndirectReference<StructTreeRoot>) {
         if let Some(catalog) = self.document_catalog.as_mut() {
-            catalog.struct_tree_root = Some(root.into());
+            catalog.struct_tree_root = Some(root);
         }
     }
 
@@ -400,7 +372,7 @@ impl<'a> DocumentContext<'a> {
     }
 
     fn write_document_info(&mut self) -> Result<IndirectReference<DocumentInfo>, Error> {
-        let doc_info = std::mem::replace(&mut self.document_info, HashMap::default());
+        let doc_info = std::mem::take(&mut self.document_info);
         self.write_object(doc_info)
     }
     /// Finish the `Context` and flush all remaining writes.
@@ -433,10 +405,7 @@ impl<'a> DocumentContext<'a> {
         }
 
         let offset = self.output.offset();
-        let mut formatter = Formatter {
-            writer: &mut self.output,
-        };
-        self.crossref.write(&mut formatter)?;
+        self.crossref.write_table(&mut self.output)?;
         self.write_trailer(offset as u32, document_catalog, document_info)?;
         self.output.flush()
     }
