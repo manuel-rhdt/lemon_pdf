@@ -486,6 +486,7 @@ fn tagged_pdf_catalog_entries_are_written() {
             context.set_marked(true);
             context.set_lang("de-DE");
             context.set_display_doc_title(true);
+            context.set_metadata("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>").unwrap();
             add_text_page(context, "Tagged", None);
         });
 
@@ -507,6 +508,12 @@ fn tagged_pdf_catalog_entries_are_written() {
         assert_eq!(lang, "de-DE");
         let preferences = catalog.get(b"ViewerPreferences").unwrap().as_dict().unwrap();
         assert!(preferences.get(b"DisplayDocTitle").unwrap().as_bool().unwrap());
+        let metadata = catalog.get(b"Metadata").unwrap().as_reference().unwrap();
+        let metadata = document.get_object(metadata).unwrap().as_stream().unwrap();
+        assert_eq!(name(metadata.dict.get(b"Type").unwrap()), "Metadata");
+        assert_eq!(name(metadata.dict.get(b"Subtype").unwrap()), "XML");
+        assert!(!metadata.dict.has(b"Filter"));
+        assert_eq!(metadata.content, b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>");
     }
 }
 
@@ -515,7 +522,7 @@ fn untagged_catalog_has_no_optional_entries() {
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| add_text_page(context, "x", None));
         let catalog = document.catalog().unwrap();
-        for key in &[&b"StructTreeRoot"[..], b"MarkInfo", b"Lang", b"ViewerPreferences"] {
+        for key in &[&b"StructTreeRoot"[..], b"MarkInfo", b"Lang", b"ViewerPreferences", b"Metadata"] {
             assert!(
                 !catalog.has(key),
                 "unexpected /{} (mode {})",

@@ -99,7 +99,14 @@ pub(crate) struct DocumentCatalog {
     mark_info: Option<MarkInfo>,
     lang: Option<TextString>,
     viewer_preferences: Option<ViewerPreferences>,
+    metadata: Option<IndirectReference<Stream<MetadataDict>>>,
 }
+
+/// The dictionary of a metadata stream (ISO 32000-1, 14.3.2), whose data is an XMP packet.
+#[derive(Debug, Default, Clone, PartialEq, PdfFormat)]
+#[rename("Metadata")]
+#[constant(Subtype = "XML")]
+pub struct MetadataDict {}
 
 /// The dictionary of an object stream (ISO 32000-1, 7.5.7).
 #[derive(Debug, PdfDictionary)]
@@ -182,6 +189,7 @@ impl<'a> DocumentContext<'a> {
             mark_info: None,
             lang: None,
             viewer_preferences: None,
+            metadata: None,
         });
         context.start_pdf()?;
         Ok(context)
@@ -338,6 +346,18 @@ impl<'a> DocumentContext<'a> {
         if let Some(catalog) = self.document_catalog.as_mut() {
             catalog.lang = Some(TextString(lang.to_owned()));
         }
+    }
+
+    /// Sets the metadata of the document (`/Metadata` of the catalog, ISO 32000-1, 14.3.2) to
+    /// the XMP packet `xmp`. The stream is not compressed, so that tools that do not parse PDF can
+    /// find the metadata (as XMP recommends).
+    pub fn set_metadata(&mut self, xmp: &str) -> Result<(), Error> {
+        let stream = Stream::new(MetadataDict {}, xmp.as_bytes().to_vec());
+        let reference = self.write_object(stream)?;
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.metadata = Some(reference);
+        }
+        Ok(())
     }
 
     /// Makes viewers show the `Title` of the document information instead of the file name.
