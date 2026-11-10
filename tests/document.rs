@@ -13,6 +13,8 @@ use lopdf::{Document, Object, ObjectId};
 
 use lemon_pdf::annotation::{Annotation, LinkAction, LinkAnnotation, UriAction};
 use lemon_pdf::font::builtin::BuiltInFont;
+use lemon_pdf::graphics_state::{BlendMode, FillRule, LineCap, LineJoin};
+use lemon_pdf::image::Image;
 use lemon_pdf::font::encoding::{EncodingEntry, PredefinedEncoding};
 use lemon_pdf::font::Font;
 use lemon_pdf::object::TextString;
@@ -607,4 +609,183 @@ fn example_document_is_valid() {
         });
         assert_eq!(document.get_pages().len(), 1);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Graphics: transparency, images and vector paths
+// ---------------------------------------------------------------------------------------------
+
+fn id<T>(reference: lemon_pdf::object::IndirectReference<T>) -> ObjectId {
+    (reference.number() as u32, reference.generation() as u16)
+}
+
+/// The resource dictionary and the decoded content of the only page of the document.
+fn single_page(document: &Document) -> (&lopdf::Dictionary, String) {
+    let (_, &page_id) = document.get_pages().iter().next().unwrap();
+    let page = document.get_dictionary(page_id).unwrap();
+    let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
+    let content = document.get_page_content(page_id);
+    (resources, String::from_utf8(content).unwrap())
+}
+
+#[test]
+fn image_with_alpha_is_embedded_with_soft_mask() {
+    let rgba = [
+        255, 0, 0, 255, /**/ 0, 255, 0, 128, //
+        0, 0, 255, 0, /**/ 10, 20, 30, 255,
+    ];
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let image = Image::from_rgba8(2, 2, &rgba).unwrap();
+            let image = context.write_image(image).unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |page_context| {
+                let key = page_context.add_xobject(image);
+                assert_eq!(page_context.add_xobject(image), key, "added twice");
+                page_context.draw_image(&key, Pt(10.0), Pt(20.0), Pt(200.0), Pt(100.0))
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert_eq!(content.trim(), "q 200 0 0 100 10 20 cm /X0 Do Q");
+        let x_objects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+        let image_ref = x_objects.get(b"X0").unwrap().as_reference().unwrap();
+        let image = document.get_object(image_ref).unwrap().as_stream().unwrap();
+        assert_eq!(name(image.dict.get(b"Type").unwrap()), "XObject");
+        assert_eq!(name(image.dict.get(b"Subtype").unwrap()), "Image");
+        assert_eq!(image.dict.get(b"Width").unwrap().as_i64().unwrap(), 2);
+        assert_eq!(image.dict.get(b"Height").unwrap().as_i64().unwrap(), 2);
+        assert_eq!(name(image.dict.get(b"ColorSpace").unwrap()), "DeviceRGB");
+        assert_eq!(image.dict.get(b"BitsPerComponent").unwrap().as_i64().unwrap(), 8);
+        assert_eq!(
+            image.decompressed_content().unwrap(),
+            vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 10, 20, 30]
+        );
+
+        let mask_ref = image.dict.get(b"SMask").unwrap().as_reference().unwrap();
+        let mask = document.get_object(mask_ref).unwrap().as_stream().unwrap();
+        assert_eq!(name(mask.dict.get(b"ColorSpace").unwrap()), "DeviceGray");
+        assert_eq!(mask.dict.get(b"Width").unwrap().as_i64().unwrap(), 2);
+        assert!(!mask.dict.has(b"SMask"));
+        assert_eq!(mask.decompressed_content().unwrap(), vec![255, 128, 0, 255]);
+    }
+}
+
+#[test]
+fn opaque_image_has_no_soft_mask() {
+    for &mode in &MODES {
+        let mut reference = None;
+        let (_, document) = build_and_load(mode, |context| {
+            let image = Image::from_rgba8(1, 1, &[1, 2, 3, 255]).unwrap();
+            reference = Some(context.write_image(image).unwrap());
+        });
+        let image = document.get_object(id(reference.unwrap())).unwrap();
+        let image = image.as_stream().unwrap();
+        assert!(!image.dict.has(b"SMask"));
+        assert_eq!(image.decompressed_content().unwrap(), vec![1, 2, 3]);
+    }
+}
+
+#[test]
+fn jpeg_is_embedded_unchanged() {
+    // An Adobe CMYK JPEG header (enough for the dimensions, not decodable).
+    let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xEE, 0x00, 0x0E];
+    jpeg.extend_from_slice(b"Adobe\x00\x64\x00\x00\x00\x00\x02");
+    jpeg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x14, 8, 0x00, 0x03, 0x00, 0x05, 4]);
+    jpeg.extend_from_slice(&[1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0, 4, 0x11, 0]);
+    jpeg.extend_from_slice(&[0xFF, 0xD9]);
+    for &mode in &MODES {
+        let mut reference = None;
+        let (_, document) = build_and_load(mode, |context| {
+            let image = Image::from_jpeg(jpeg.clone()).unwrap();
+            assert_eq!((image.width(), image.height()), (5, 3));
+            let image = image.with_alpha(vec![7; 15]).unwrap();
+            reference = Some(context.write_image(image).unwrap());
+        });
+        let image = document.get_object(id(reference.unwrap())).unwrap();
+        let image = image.as_stream().unwrap();
+        assert_eq!(name(image.dict.get(b"Filter").unwrap()), "DCTDecode");
+        assert_eq!(name(image.dict.get(b"ColorSpace").unwrap()), "DeviceCMYK");
+        assert_eq!(image.content, jpeg);
+        let decode: Vec<f32> = image
+            .dict
+            .get(b"Decode")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_float().unwrap())
+            .collect();
+        assert_eq!(decode, vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        assert!(image.dict.has(b"SMask"));
+    }
+}
+
+#[test]
+fn transparency_is_set_through_ext_gstate() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |page_context| {
+                page_context.set_fill_alpha(0.5)?;
+                page_context.set_stroke_alpha(0.25)?;
+                // equal dictionaries share a resource name
+                page_context.set_fill_alpha(0.5)?;
+                page_context.set_blend_mode(BlendMode::Multiply)?;
+                page_context.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
+                page_context.fill_path()
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert_eq!(
+            content.trim(),
+            "/GS0 gs /GS1 gs /GS0 gs /GS2 gs 0 0 10 10 re f"
+        );
+        let states = resources.get(b"ExtGState").unwrap().as_dict().unwrap();
+        assert_eq!(states.len(), 3);
+        let state = |key: &[u8]| states.get(key).unwrap().as_dict().unwrap();
+        assert_eq!(name(state(b"GS0").get(b"Type").unwrap()), "ExtGState");
+        assert_eq!(state(b"GS0").get(b"ca").unwrap().as_float().unwrap(), 0.5);
+        assert!(!state(b"GS0").has(b"CA"));
+        assert_eq!(state(b"GS1").get(b"CA").unwrap().as_float().unwrap(), 0.25);
+        assert_eq!(name(state(b"GS2").get(b"BM").unwrap()), "Multiply");
+        assert!(!resources.has(b"Font"));
+        assert!(!resources.has(b"XObject"));
+    }
+}
+
+#[test]
+fn vector_path_operators_are_written() {
+    let (_, document) = build_and_load(true, |context| {
+        let mut page = Page::new();
+        page.add_content(context, Some(StreamFilter::Deflate), |c| {
+            c.line_width(Pt(2.0))?;
+            c.line_cap(LineCap::Round)?;
+            c.line_join(LineJoin::Bevel)?;
+            c.miter_limit(4.0)?;
+            c.dash_pattern(&[Pt(3.0), Pt(1.5)], Pt(0.0))?;
+            c.device_gray_stroke_color(0.5)?;
+            c.device_cmyk_fill_color(0.0, 1.0, 1.0, 0.0)?;
+            c.move_to(Pt(0.0), Pt(0.0))?;
+            c.curve_to(Pt(1.0), Pt(2.0), Pt(3.0), Pt(4.0), Pt(5.0), Pt(6.0))?;
+            c.close_fill_and_stroke_path(FillRule::EvenOdd)?;
+            c.rect(Pt(0.0), Pt(0.0), Pt(5.0), Pt(5.0))?;
+            c.clip(FillRule::NonZero)?;
+            c.end_path()?;
+            c.dash_pattern(&[], Pt(0.0))
+        })
+        .unwrap();
+        context.add_page(page).unwrap();
+    });
+    let (_, content) = single_page(&document);
+    assert_eq!(
+        content.trim(),
+        "2 w 1 J 2 j 4 M [ 3 1.5 ] 0 d 0.5 G 0 1 1 0 k 0 0 m 1 2 3 4 5 6 c b* \
+         0 0 5 5 re W n [ ] 0 d"
+    );
 }

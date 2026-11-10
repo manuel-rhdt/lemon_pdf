@@ -19,6 +19,8 @@ use lemon_pdf_derive::PdfFormat;
 use crate as lemon_pdf;
 
 use crate::font::Font;
+use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
+use crate::image::XObject;
 use crate::object::{Formatter, IndirectReference, PdfFormat, WriteEscaped};
 use crate::pagetree::{Page, ResourceDictionary};
 use crate::stream::StreamEncoder;
@@ -30,6 +32,10 @@ pub struct Pt(pub f64);
 #[derive(Debug)]
 pub struct PageContext<'page, 'context, 'context_borrow> {
     pub(crate) fonts: HashMap<IndirectReference<Font>, String>,
+    pub(crate) x_objects: HashMap<IndirectReference<XObject>, String>,
+    /// Graphics state parameter dictionaries with their resource names. A `Vec` because
+    /// `ExtGState` holds floats and cannot be hashed; pages only use a handful of them.
+    pub(crate) ext_g_states: Vec<(ExtGState, String)>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -43,6 +49,67 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
             .entry(font)
             .or_insert_with(|| format!("F{}", num_fonts));
         key.clone()
+    }
+
+    /// Adds an XObject (for example an image from `DocumentContext::write_image`) to the
+    /// resources of the page and returns its resource name.
+    pub fn add_xobject(&mut self, x_object: IndirectReference<XObject>) -> String {
+        let num_x_objects = self.x_objects.len();
+        self.x_objects
+            .entry(x_object)
+            .or_insert_with(|| format!("X{}", num_x_objects))
+            .clone()
+    }
+
+    /// Adds a graphics state parameter dictionary to the resources of the page and returns its
+    /// resource name. Adding an equal dictionary again returns the same name.
+    pub fn add_ext_gstate(&mut self, state: ExtGState) -> String {
+        if let Some((_, key)) = self.ext_g_states.iter().find(|(other, _)| *other == state) {
+            return key.clone();
+        }
+        let key = format!("GS{}", self.ext_g_states.len());
+        self.ext_g_states.push((state, key.clone()));
+        key
+    }
+
+    /// Applies a graphics state parameter dictionary from `add_ext_gstate` (`gs` operator).
+    pub fn set_ext_gstate(&mut self, key: &str) -> Result<()> {
+        self.write_operation1(key, "gs")
+    }
+
+    /// Adds `state` to the resources of the page and applies it.
+    pub fn apply_ext_gstate(&mut self, state: ExtGState) -> Result<()> {
+        let key = self.add_ext_gstate(state);
+        self.set_ext_gstate(&key)
+    }
+
+    /// Sets the opacity (0 to 1) of fills, text and images.
+    pub fn set_fill_alpha(&mut self, alpha: f64) -> Result<()> {
+        self.apply_ext_gstate(ExtGState::new().with_fill_alpha(alpha))
+    }
+
+    /// Sets the opacity (0 to 1) of strokes.
+    pub fn set_stroke_alpha(&mut self, alpha: f64) -> Result<()> {
+        self.apply_ext_gstate(ExtGState::new().with_stroke_alpha(alpha))
+    }
+
+    pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> Result<()> {
+        self.apply_ext_gstate(ExtGState::new().with_blend_mode(blend_mode))
+    }
+
+    /// Paints an XObject from `add_xobject` (`Do` operator) in the current user space.
+    pub fn draw_xobject(&mut self, key: &str) -> Result<()> {
+        self.write_operation1(key, "Do")
+    }
+
+    /// Paints an image from `add_xobject` into the rectangle with the lower left corner
+    /// (`x`, `y`). The graphics state is left unchanged.
+    pub fn draw_image(&mut self, key: &str, x: Pt, y: Pt, width: Pt, height: Pt) -> Result<()> {
+        self.save_graphics_state()?;
+        // images are painted into the unit square
+        self.concatenate_matrix(width.0, 0.0, 0.0, height.0, x, y)?;
+        self.draw_xobject(key)?;
+        self.restore_graphics_state()
     }
 
     pub fn push_operand(&mut self, operand: impl PdfFormat) -> Result<()> {
@@ -131,6 +198,33 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.write_operation1(width, "w")
     }
 
+    pub fn line_cap(&mut self, cap: LineCap) -> Result<()> {
+        self.write_operation1(cap as i64, "J")
+    }
+
+    pub fn line_join(&mut self, join: LineJoin) -> Result<()> {
+        self.write_operation1(join as i64, "j")
+    }
+
+    /// Limits the length of miter joins, as a ratio of the miter length to the line width.
+    pub fn miter_limit(&mut self, limit: f64) -> Result<()> {
+        self.write_operation1(limit, "M")
+    }
+
+    /// Sets the dash pattern: alternating lengths of dashes and gaps, starting `phase` into
+    /// the pattern. An empty `dashes` slice draws solid lines.
+    pub fn dash_pattern(&mut self, dashes: &[Pt], phase: Pt) -> Result<()> {
+        self.write_operation2(dashes, phase, "d")
+    }
+
+    pub fn device_gray_fill_color(&mut self, gray: f64) -> Result<()> {
+        self.write_operation1(gray, "g")
+    }
+
+    pub fn device_gray_stroke_color(&mut self, gray: f64) -> Result<()> {
+        self.write_operation1(gray, "G")
+    }
+
     pub fn device_rgb_fill_color(&mut self, red: f64, green: f64, blue: f64) -> Result<()> {
         self.write_operation3(red, green, blue, "rg")
     }
@@ -139,12 +233,29 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.write_operation3(red, green, blue, "RG")
     }
 
+    pub fn device_cmyk_fill_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
+        self.write_operation4(c, m, y, k, "k")
+    }
+
+    pub fn device_cmyk_stroke_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
+        self.write_operation4(c, m, y, k, "K")
+    }
+
     pub fn move_to(&mut self, x: Pt, y: Pt) -> Result<()> {
         self.write_operation2(x, y, "m")
     }
 
     pub fn line_to(&mut self, x: Pt, y: Pt) -> Result<()> {
         self.write_operation2(x, y, "l")
+    }
+
+    /// Appends a cubic Bézier curve from the current point to (`x3`, `y3`) with the control
+    /// points (`x1`, `y1`) and (`x2`, `y2`).
+    pub fn curve_to(&mut self, x1: Pt, y1: Pt, x2: Pt, y2: Pt, x3: Pt, y3: Pt) -> Result<()> {
+        for operand in &[x1, y1, x2, y2, x3, y3] {
+            self.push_operand(operand)?;
+        }
+        self.apply_operator("c")
     }
 
     pub fn rect(&mut self, x: Pt, y: Pt, width: Pt, height: Pt) -> Result<()> {
@@ -163,8 +274,48 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.apply_operator("s")
     }
 
+    /// Fills the path with the nonzero winding number rule.
     pub fn fill_path(&mut self) -> Result<()> {
         self.apply_operator("f")
+    }
+
+    /// Fills the path with the given fill rule.
+    pub fn fill_path_with_rule(&mut self, rule: FillRule) -> Result<()> {
+        match rule {
+            FillRule::NonZero => self.apply_operator("f"),
+            FillRule::EvenOdd => self.apply_operator("f*"),
+        }
+    }
+
+    /// Fills, then strokes the path.
+    pub fn fill_and_stroke_path(&mut self, rule: FillRule) -> Result<()> {
+        match rule {
+            FillRule::NonZero => self.apply_operator("B"),
+            FillRule::EvenOdd => self.apply_operator("B*"),
+        }
+    }
+
+    /// Closes, fills, then strokes the path.
+    pub fn close_fill_and_stroke_path(&mut self, rule: FillRule) -> Result<()> {
+        match rule {
+            FillRule::NonZero => self.apply_operator("b"),
+            FillRule::EvenOdd => self.apply_operator("b*"),
+        }
+    }
+
+    /// Ends the path without painting it, for example after `clip`.
+    pub fn end_path(&mut self) -> Result<()> {
+        self.apply_operator("n")
+    }
+
+    /// Intersects the clipping path with the current path. The clipping path takes effect
+    /// after the next path painting operator (usually `end_path`) and lasts until the graphics
+    /// state is restored.
+    pub fn clip(&mut self, rule: FillRule) -> Result<()> {
+        match rule {
+            FillRule::NonZero => self.apply_operator("W"),
+            FillRule::EvenOdd => self.apply_operator("W*"),
+        }
     }
 
     pub fn begin_text(&mut self) -> Result<()> {
@@ -201,7 +352,21 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         for (font_ref, font_key) in self.fonts {
             font_dict.insert(font_key, font_ref);
         }
-        let resources = ResourceDictionary { font: font_dict };
+        let x_object = self
+            .x_objects
+            .into_iter()
+            .map(|(reference, key)| (key, reference))
+            .collect();
+        let ext_g_state = self
+            .ext_g_states
+            .into_iter()
+            .map(|(state, key)| (key, state))
+            .collect();
+        let resources = ResourceDictionary {
+            font: font_dict,
+            x_object,
+            ext_g_state,
+        };
         self.page.resources = Some(resources);
 
         let content_stream = self.content_stream.into_stream();

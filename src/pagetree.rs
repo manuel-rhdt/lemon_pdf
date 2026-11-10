@@ -24,6 +24,8 @@ use crate::array::Array;
 use crate::content::PageContext;
 use crate::document::DocumentContext;
 use crate::font::Font;
+use crate::graphics_state::ExtGState;
+use crate::image::XObject;
 use crate::object::{IndirectReference, Object, Value};
 use crate::stream::{Stream, StreamEncoder, StreamFilter};
 use crate::Pt;
@@ -54,7 +56,14 @@ impl Pages {
 #[derive(Clone, Debug, Default, PartialEq, PdfFormat)]
 #[omit_type(true)]
 pub struct ResourceDictionary {
+    #[skip_if("HashMap::is_empty")]
     pub font: HashMap<String, IndirectReference<Font>>,
+    #[rename("XObject")]
+    #[skip_if("HashMap::is_empty")]
+    pub x_object: HashMap<String, IndirectReference<XObject>>,
+    #[rename("ExtGState")]
+    #[skip_if("HashMap::is_empty")]
+    pub ext_g_state: HashMap<String, ExtGState>,
 }
 
 /// A convenience struct to create PDF pages.
@@ -112,6 +121,8 @@ impl Page {
     ) -> PageContext<'_, 'context, 'borrow> {
         PageContext {
             fonts: HashMap::new(),
+            x_objects: HashMap::new(),
+            ext_g_states: Vec::new(),
             page: self,
             content_stream: StreamEncoder::new(stream_filter),
             pdf_context: context,
