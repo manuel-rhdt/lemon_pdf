@@ -32,6 +32,27 @@ use crate::DocumentContext;
 #[derive(Debug, Default, Copy, Clone, PartialEq, PdfFormat)]
 pub struct Pt(pub f64);
 
+/// A transformation matrix `[a b c d e f]` (ISO 32000-1, 8.3.3), as the operands of the `cm`
+/// operator: a point (`x`, `y`) is mapped to (`a*x + c*y + e`, `b*x + d*y + f`).
+#[derive(Debug, Copy, Clone, PartialEq, PdfFormat)]
+pub struct Matrix(pub [f64; 6]);
+
+impl Matrix {
+    pub const IDENTITY: Matrix = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+    pub fn new(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> Self {
+        Matrix([a, b, c, d, e, f])
+    }
+
+    pub fn translation(x: Pt, y: Pt) -> Self {
+        Matrix([1.0, 0.0, 0.0, 1.0, x.0, y.0])
+    }
+
+    pub fn scale(x: f64, y: f64) -> Self {
+        Matrix([x, 0.0, 0.0, y, 0.0, 0.0])
+    }
+}
+
 /// The dictionary of a content stream, which has no entries besides `Length` and `Filter`.
 #[derive(Debug, Default, Clone, PartialEq, PdfDictionary)]
 #[omit_type(true)]

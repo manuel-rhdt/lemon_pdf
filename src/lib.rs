@@ -32,7 +32,7 @@ pub mod stream;
 pub mod structure_tree;
 mod trailer;
 
-pub use self::content::Pt;
+pub use self::content::{Matrix, Pt};
 pub use self::object::{IndirectObject, PdfDictionary, PdfFormat};
 pub use self::pagetree::Page;
 pub use crate::document::*;

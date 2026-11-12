@@ -14,8 +14,8 @@ use lopdf::{Document, Object, ObjectId};
 use lemon_pdf::annotation::{Annotation, LinkAction, LinkAnnotation, UriAction};
 use lemon_pdf::font::builtin::BuiltInFont;
 use lemon_pdf::graphics_state::{BlendMode, FillRule, LineCap, LineJoin};
-use lemon_pdf::image::{ColorSpace, Image};
-use lemon_pdf::shading::{ColorStop, Shading, ShadingPattern};
+use lemon_pdf::image::Image;
+use lemon_pdf::shading::{Circle, ColorStop, Gradient, Gray, Rgb, Shading, ShadingPattern};
 use lemon_pdf::font::encoding::{EncodingEntry, PredefinedEncoding};
 use lemon_pdf::font::Font;
 use lemon_pdf::dictionary::Dictionary;
@@ -24,7 +24,7 @@ use lemon_pdf::stream::{Stream, StreamFilter};
 use lemon_pdf::structure_tree::{
     NumberTree, StructElem, StructParent, StructTreeRoot, StructType,
 };
-use lemon_pdf::{DocumentContext, Page, Pt, Version};
+use lemon_pdf::{DocumentContext, Matrix, Page, Pt, Version};
 
 const MODES: [bool; 2] = [true, false];
 
@@ -774,25 +774,27 @@ fn shadings_and_patterns_are_resources() {
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
             let axial = Shading::axial(
-                ColorSpace::DeviceRGB,
-                (0.0, 0.0),
-                (100.0, 0.0),
-                &[
-                    ColorStop::new(0.0, [1.0, 0.0, 0.0]),
-                    ColorStop::new(0.5, [1.0, 1.0, 0.0]),
-                    ColorStop::new(1.0, [0.0, 0.0, 1.0]),
-                ],
-                true,
-            )
-            .unwrap();
+                (Pt(0.0), Pt(0.0)),
+                (Pt(100.0), Pt(0.0)),
+                &Gradient::new(&[
+                    ColorStop::new(0.0, Rgb(1.0, 0.0, 0.0)),
+                    ColorStop::new(0.5, Rgb(1.0, 1.0, 0.0)),
+                    ColorStop::new(1.0, Rgb(0.0, 0.0, 1.0)),
+                ])
+                .unwrap()
+                .extended(),
+            );
+            let circle = |radius| Circle {
+                x: Pt(50.0),
+                y: Pt(50.0),
+                radius: Pt(radius),
+            };
             let radial = Shading::radial(
-                ColorSpace::DeviceGray,
-                (50.0, 50.0, 0.0),
-                (50.0, 50.0, 50.0),
-                &[ColorStop::new(0.0, [1.0]), ColorStop::new(1.0, [0.0])],
-                false,
-            )
-            .unwrap();
+                circle(0.0),
+                circle(50.0),
+                &Gradient::new(&[ColorStop::new(0.0, Gray(1.0)), ColorStop::new(1.0, Gray(0.0))])
+                    .unwrap(),
+            );
             let mut page = Page::new();
             page.add_content(context, None, |c| {
                 let first = c.add_shading(axial.clone());
@@ -807,7 +809,8 @@ fn shadings_and_patterns_are_resources() {
                 c.restore_graphics_state()?;
                 c.paint_shading(&second)?;
                 let pattern = c.add_shading_pattern(
-                    ShadingPattern::new(axial).with_matrix([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]),
+                    ShadingPattern::new(axial)
+                        .with_matrix(Matrix::translation(Pt(10.0), Pt(0.0))),
                 );
                 c.set_fill_pattern(&pattern)?;
                 c.set_stroke_pattern(&pattern)
