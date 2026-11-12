@@ -14,7 +14,8 @@ use lopdf::{Document, Object, ObjectId};
 use lemon_pdf::annotation::{Annotation, LinkAction, LinkAnnotation, UriAction};
 use lemon_pdf::font::builtin::BuiltInFont;
 use lemon_pdf::graphics_state::{BlendMode, FillRule, LineCap, LineJoin};
-use lemon_pdf::image::Image;
+use lemon_pdf::image::{ColorSpace, Image};
+use lemon_pdf::shading::{ColorStop, Shading, ShadingPattern};
 use lemon_pdf::font::encoding::{EncodingEntry, PredefinedEncoding};
 use lemon_pdf::font::Font;
 use lemon_pdf::dictionary::Dictionary;
@@ -766,6 +767,93 @@ fn transparency_is_set_through_ext_gstate() {
         assert!(!resources.has(b"Font"));
         assert!(!resources.has(b"XObject"));
     }
+}
+
+#[test]
+fn shadings_and_patterns_are_resources() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let axial = Shading::axial(
+                ColorSpace::DeviceRGB,
+                (0.0, 0.0),
+                (100.0, 0.0),
+                &[
+                    ColorStop::new(0.0, [1.0, 0.0, 0.0]),
+                    ColorStop::new(0.5, [1.0, 1.0, 0.0]),
+                    ColorStop::new(1.0, [0.0, 0.0, 1.0]),
+                ],
+                true,
+            )
+            .unwrap();
+            let radial = Shading::radial(
+                ColorSpace::DeviceGray,
+                (50.0, 50.0, 0.0),
+                (50.0, 50.0, 50.0),
+                &[ColorStop::new(0.0, [1.0]), ColorStop::new(1.0, [0.0])],
+                false,
+            )
+            .unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                let first = c.add_shading(axial.clone());
+                let second = c.add_shading(radial);
+                // an equal shading shares its resource name
+                assert_eq!(c.add_shading(axial.clone()), first);
+                c.save_graphics_state()?;
+                c.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
+                c.clip(FillRule::NonZero)?;
+                c.end_path()?;
+                c.paint_shading(&first)?;
+                c.restore_graphics_state()?;
+                c.paint_shading(&second)?;
+                let pattern = c.add_shading_pattern(
+                    ShadingPattern::new(axial).with_matrix([1.0, 0.0, 0.0, 1.0, 10.0, 0.0]),
+                );
+                c.set_fill_pattern(&pattern)?;
+                c.set_stroke_pattern(&pattern)
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert_eq!(
+            content.trim(),
+            "q 0 0 100 50 re W n /Sh0 sh Q /Sh1 sh /Pattern cs /P0 scn /Pattern CS /P0 SCN"
+        );
+        let shadings = resources.get(b"Shading").unwrap().as_dict().unwrap();
+        assert_eq!(shadings.len(), 2);
+        let axial = shadings.get(b"Sh0").unwrap().as_dict().unwrap();
+        assert_eq!(axial.get(b"ShadingType").unwrap().as_i64().unwrap(), 2);
+        assert_eq!(name(axial.get(b"ColorSpace").unwrap()), "DeviceRGB");
+        assert_eq!(axial.get(b"Coords").unwrap().as_array().unwrap().len(), 4);
+        let function = axial.get(b"Function").unwrap().as_dict().unwrap();
+        assert_eq!(function.get(b"FunctionType").unwrap().as_i64().unwrap(), 3);
+        assert_eq!(function.get(b"Functions").unwrap().as_array().unwrap().len(), 2);
+        let radial = shadings.get(b"Sh1").unwrap().as_dict().unwrap();
+        assert_eq!(radial.get(b"ShadingType").unwrap().as_i64().unwrap(), 3);
+        assert_eq!(radial.get(b"Coords").unwrap().as_array().unwrap().len(), 6);
+
+        let patterns = resources.get(b"Pattern").unwrap().as_dict().unwrap();
+        let pattern = patterns.get(b"P0").unwrap().as_dict().unwrap();
+        assert_eq!(name(pattern.get(b"Type").unwrap()), "Pattern");
+        assert_eq!(pattern.get(b"PatternType").unwrap().as_i64().unwrap(), 2);
+        assert!(pattern.get(b"Shading").unwrap().as_dict().is_ok());
+        assert_eq!(pattern.get(b"Matrix").unwrap().as_array().unwrap().len(), 6);
+    }
+}
+
+#[test]
+fn pages_without_shadings_have_no_shading_resources() {
+    let (_, document) = build_and_load(true, |context| {
+        let mut page = Page::new();
+        page.add_content(context, None, |c| c.rect(Pt(0.0), Pt(0.0), Pt(1.0), Pt(1.0)))
+            .unwrap();
+        context.add_page(page).unwrap();
+    });
+    let (resources, _) = single_page(&document);
+    assert!(!resources.has(b"Shading"));
+    assert!(!resources.has(b"Pattern"));
 }
 
 #[test]

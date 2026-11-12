@@ -27,6 +27,7 @@ pub mod graphics_state;
 pub mod image;
 pub mod object;
 pub mod pagetree;
+pub mod shading;
 pub mod stream;
 pub mod structure_tree;
 mod trailer;
