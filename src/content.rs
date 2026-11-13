@@ -24,7 +24,9 @@ use crate::image::XObject;
 use crate::object::{
     write_literal_string, Formatter, IndirectReference, Name, PdfFormat, WriteEscaped,
 };
+use crate::form::{FormDict, FormXObject, TransparencyGroup};
 use crate::pagetree::{Page, ResourceDictionary};
+use crate::stream::StreamFilter;
 use crate::shading::{Shading, ShadingPattern};
 use crate::stream::{Stream, StreamEncoder};
 use crate::DocumentContext;
@@ -433,7 +435,17 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         Ok(())
     }
 
-    pub(crate) fn finish(self) -> Result<()> {
+    /// The resources the content used, the encoded content, and the page and document the
+    /// context was borrowing.
+    #[allow(clippy::type_complexity)]
+    fn into_parts(
+        self,
+    ) -> (
+        ResourceDictionary,
+        StreamEncoder,
+        &'page mut Page,
+        &'context_borrow mut DocumentContext<'context>,
+    ) {
         let resources = ResourceDictionary {
             font: by_name(self.fonts),
             x_object: by_name(self.x_objects),
@@ -453,11 +465,53 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
                 .map(|(pattern, key)| (key, pattern))
                 .collect(),
         };
-        self.page.resources = Some(resources);
+        (resources, self.content_stream, self.page, self.pdf_context)
+    }
 
-        let content_stream = Stream::from_encoder(ContentStreamDict {}, self.content_stream)?;
-        let content_stream_ref = self.pdf_context.write_object(content_stream)?;
-        self.page.contents = vec![content_stream_ref];
+    pub(crate) fn finish(self) -> Result<()> {
+        let (resources, content_stream, page, pdf_context) = self.into_parts();
+        page.resources = Some(resources);
+
+        let content_stream = Stream::from_encoder(ContentStreamDict {}, content_stream)?;
+        let content_stream_ref = pdf_context.write_object(content_stream)?;
+        page.contents = vec![content_stream_ref];
         Ok(())
+    }
+}
+
+impl<'context> DocumentContext<'context> {
+    /// Writes a form XObject (ISO 32000-1, 8.10) and returns a reference to it.
+    ///
+    /// `content` draws the form like a page, in form space; everything outside of `bbox`
+    /// (`[xmin, ymin, xmax, ymax]`) is clipped. The form can be painted with
+    /// `PageContext::add_xobject` and `PageContext::draw_xobject`, or be the group of a
+    /// `SoftMask`. A form that is a soft mask group needs a transparency group.
+    pub fn write_form(
+        &mut self,
+        bbox: [Pt; 4],
+        group: Option<TransparencyGroup>,
+        stream_filter: Option<StreamFilter>,
+        content: impl FnOnce(&mut PageContext<'_, 'context, '_>) -> Result<()>,
+    ) -> Result<IndirectReference<FormXObject>> {
+        let mut page = Page::new();
+        let mut context = PageContext {
+            fonts: HashMap::new(),
+            x_objects: HashMap::new(),
+            ext_g_states: Vec::new(),
+            shadings: Vec::new(),
+            patterns: Vec::new(),
+            content_stream: StreamEncoder::new(stream_filter),
+            page: &mut page,
+            pdf_context: self,
+        };
+        content(&mut context)?;
+        let (resources, encoder, _, _) = context.into_parts();
+        let dict = FormDict {
+            bbox,
+            matrix: None,
+            resources,
+            group,
+        };
+        self.write_object(Stream::from_encoder(dict, encoder)?)
     }
 }

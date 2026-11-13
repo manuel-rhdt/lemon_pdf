@@ -15,7 +15,11 @@
 //! Graphics state parameters that can only be set through a graphics state parameter
 //! dictionary (ISO 32000-1, 8.4.5), most importantly transparency (ISO 32000-1, 11).
 
+use std::io::Result;
+
 use crate as lemon_pdf;
+use crate::form::FormReference;
+use crate::object::{Formatter, Name, PdfFormat};
 use lemon_pdf_derive::PdfFormat;
 
 /// A graphics state parameter dictionary (`/ExtGState`).
@@ -35,6 +39,9 @@ pub struct ExtGState {
     /// The blend mode used to composite painted objects with the backdrop.
     #[rename("BM")]
     pub blend_mode: Option<BlendMode>,
+    /// The soft mask that the painted objects are masked with.
+    #[rename("SMask")]
+    pub soft_mask: Option<SoftMask>,
 }
 
 impl ExtGState {
@@ -57,6 +64,70 @@ impl ExtGState {
     pub fn with_blend_mode(mut self, blend_mode: BlendMode) -> Self {
         self.blend_mode = Some(blend_mode);
         self
+    }
+
+    /// Sets the soft mask, or removes it with `SoftMask::None`.
+    pub fn with_soft_mask(mut self, soft_mask: SoftMask) -> Self {
+        self.soft_mask = Some(soft_mask);
+        self
+    }
+}
+
+/// How the group of a soft mask makes the mask values (ISO 32000-1, 11.6.5.2).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PdfFormat)]
+pub enum MaskKind {
+    /// The mask value is the opacity of the group.
+    Alpha,
+    /// The mask value is the luminosity of the group painted on a black backdrop.
+    Luminosity,
+}
+
+/// The dictionary of a soft mask.
+#[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[rename("Mask")]
+pub struct SoftMaskDictionary {
+    #[rename("S")]
+    pub kind: MaskKind,
+    /// The transparency group (a form XObject with a `Group` entry) that makes the mask.
+    #[rename("G")]
+    pub group: FormReference,
+}
+
+/// A soft mask: a mask value for every point, which scales the opacity of everything that is
+/// painted while it is in the graphics state. The mask is made from a form XObject, in the
+/// coordinate system that is current when the graphics state is applied.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SoftMask {
+    /// Removes the soft mask.
+    None,
+    Mask(SoftMaskDictionary),
+}
+
+impl SoftMask {
+    /// A mask where the opacity is the luminosity of `group` painted on black. Use a group
+    /// of the gray color space.
+    pub fn luminosity(group: FormReference) -> Self {
+        SoftMask::Mask(SoftMaskDictionary {
+            kind: MaskKind::Luminosity,
+            group,
+        })
+    }
+
+    /// A mask where the opacity is the opacity of `group`.
+    pub fn alpha(group: FormReference) -> Self {
+        SoftMask::Mask(SoftMaskDictionary {
+            kind: MaskKind::Alpha,
+            group,
+        })
+    }
+}
+
+impl PdfFormat for SoftMask {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        match self {
+            SoftMask::None => Name::from("None").write(output),
+            SoftMask::Mask(dictionary) => dictionary.write(output),
+        }
     }
 }
 
@@ -125,6 +196,20 @@ mod tests {
             })
             .unwrap();
         String::from_utf8(buffer).unwrap()
+    }
+
+    #[test]
+    fn soft_masks_are_a_dictionary_or_none() {
+        use crate::object::IndirectReference;
+        let state = ExtGState::new().with_soft_mask(SoftMask::None);
+        assert!(written(&state).contains("/SMask /None\n"), "{}", written(&state));
+        let group = IndirectReference::new(7, 0);
+        let output = written(&ExtGState::new().with_soft_mask(SoftMask::luminosity(group)));
+        assert!(output.contains("/SMask << /Type /Mask"), "{}", output);
+        assert!(output.contains("/S /Luminosity"), "{}", output);
+        assert!(output.contains("/G 7 0 R"), "{}", output);
+        let output = written(&ExtGState::new().with_soft_mask(SoftMask::alpha(group)));
+        assert!(output.contains("/S /Alpha"), "{}", output);
     }
 
     #[test]

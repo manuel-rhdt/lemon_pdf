@@ -295,6 +295,7 @@ impl Image {
 #[indirect_variants]
 pub enum XObject {
     Image(ImageXObject),
+    Form(crate::form::FormXObject),
 }
 
 fn is_false(value: &bool) -> bool {
