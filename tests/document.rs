@@ -15,6 +15,10 @@ use lemon_pdf::annotation::{Annotation, LinkAction, LinkAnnotation, UriAction};
 use lemon_pdf::font::builtin::BuiltInFont;
 use lemon_pdf::graphics_state::{BlendMode, FillRule, LineCap, LineJoin};
 use lemon_pdf::image::Image;
+use lemon_pdf::mesh::{CoonsMesh, FreeFormMesh, LatticeMesh, Patch, Vertex};
+use lemon_pdf::shading::{
+    AxialShading, Circle, ColorStop, Gradient, Gray, Point, RadialShading, Rgb, ShadingPattern,
+};
 use lemon_pdf::font::encoding::{EncodingEntry, PredefinedEncoding};
 use lemon_pdf::font::Font;
 use lemon_pdf::dictionary::Dictionary;
@@ -23,7 +27,7 @@ use lemon_pdf::stream::{Stream, StreamFilter};
 use lemon_pdf::structure_tree::{
     NumberTree, StructElem, StructParent, StructTreeRoot, StructType,
 };
-use lemon_pdf::{DocumentContext, Page, Pt, Version};
+use lemon_pdf::{DocumentContext, Matrix, Page, Pt, Version};
 
 const MODES: [bool; 2] = [true, false];
 
@@ -766,6 +770,164 @@ fn transparency_is_set_through_ext_gstate() {
         assert!(!resources.has(b"Font"));
         assert!(!resources.has(b"XObject"));
     }
+}
+
+#[test]
+fn shadings_and_patterns_are_resources() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let axial = AxialShading::new(
+                Point::new(0.0, 0.0),
+                Point::new(100.0, 0.0),
+                &Gradient::new(&[
+                    ColorStop::new(0.0, Rgb(1.0, 0.0, 0.0)),
+                    ColorStop::new(0.5, Rgb(1.0, 1.0, 0.0)),
+                    ColorStop::new(1.0, Rgb(0.0, 0.0, 1.0)),
+                ])
+                .unwrap()
+                .extended(),
+            );
+            let circle = |radius| Circle {
+                x: Pt(50.0),
+                y: Pt(50.0),
+                radius: Pt(radius),
+            };
+            let radial = RadialShading::new(
+                circle(0.0),
+                circle(50.0),
+                &Gradient::new(&[ColorStop::new(0.0, Gray(1.0)), ColorStop::new(1.0, Gray(0.0))])
+                    .unwrap(),
+            );
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                let first = c.add_shading(axial.clone());
+                let second = c.add_shading(radial);
+                // an equal shading shares its resource name
+                assert_eq!(c.add_shading(axial.clone()), first);
+                c.save_graphics_state()?;
+                c.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
+                c.clip(FillRule::NonZero)?;
+                c.end_path()?;
+                c.paint_shading(&first)?;
+                c.restore_graphics_state()?;
+                c.paint_shading(&second)?;
+                let pattern = c.add_shading_pattern(
+                    ShadingPattern::new(axial)
+                        .with_matrix(Matrix::translation(Pt(10.0), Pt(0.0))),
+                );
+                c.set_fill_pattern(&pattern)?;
+                c.set_stroke_pattern(&pattern)
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert_eq!(
+            content.trim(),
+            "q 0 0 100 50 re W n /Sh0 sh Q /Sh1 sh /Pattern cs /P0 scn /Pattern CS /P0 SCN"
+        );
+        let shadings = resources.get(b"Shading").unwrap().as_dict().unwrap();
+        assert_eq!(shadings.len(), 2);
+        let axial = shadings.get(b"Sh0").unwrap().as_dict().unwrap();
+        assert_eq!(axial.get(b"ShadingType").unwrap().as_i64().unwrap(), 2);
+        assert_eq!(name(axial.get(b"ColorSpace").unwrap()), "DeviceRGB");
+        assert_eq!(axial.get(b"Coords").unwrap().as_array().unwrap().len(), 4);
+        let function = axial.get(b"Function").unwrap().as_dict().unwrap();
+        assert_eq!(function.get(b"FunctionType").unwrap().as_i64().unwrap(), 3);
+        assert_eq!(function.get(b"Functions").unwrap().as_array().unwrap().len(), 2);
+        let radial = shadings.get(b"Sh1").unwrap().as_dict().unwrap();
+        assert_eq!(radial.get(b"ShadingType").unwrap().as_i64().unwrap(), 3);
+        assert_eq!(radial.get(b"Coords").unwrap().as_array().unwrap().len(), 6);
+
+        let patterns = resources.get(b"Pattern").unwrap().as_dict().unwrap();
+        let pattern = patterns.get(b"P0").unwrap().as_dict().unwrap();
+        assert_eq!(name(pattern.get(b"Type").unwrap()), "Pattern");
+        assert_eq!(pattern.get(b"PatternType").unwrap().as_i64().unwrap(), 2);
+        assert!(pattern.get(b"Shading").unwrap().as_dict().is_ok());
+        assert_eq!(pattern.get(b"Matrix").unwrap().as_array().unwrap().len(), 6);
+    }
+}
+
+#[test]
+fn mesh_shadings_are_streams_referenced_from_the_resources() {
+    let red = |x: f64, y: f64| Vertex::new(x, y, Rgb(1.0, 0.0, 0.0));
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let triangles = context
+                .write_mesh_shading(&FreeFormMesh::new([
+                    red(0.0, 0.0),
+                    red(10.0, 0.0),
+                    red(0.0, 10.0),
+                ]))
+                .unwrap();
+            let lattice = context
+                .write_mesh_shading(
+                    &LatticeMesh::new(vec![
+                        vec![red(0.0, 0.0), red(1.0, 0.0)],
+                        vec![red(0.0, 1.0), red(1.0, 1.0)],
+                    ])
+                    .unwrap(),
+                )
+                .unwrap();
+            let mut points = [Point::default(); 12];
+            for (i, point) in points.iter_mut().enumerate() {
+                *point = Point::new(i as f64, 0.0);
+            }
+            let coons = context
+                .write_mesh_shading(&CoonsMesh::new(Patch {
+                    points,
+                    colors: [Gray(0.0); 4],
+                }))
+                .unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                for shading in [triangles.clone(), lattice, coons] {
+                    let key = c.add_shading(shading);
+                    c.paint_shading(&key)?;
+                }
+                // an equal shading shares its name
+                assert_eq!(c.add_shading(triangles.clone()), c.add_shading(triangles.clone()));
+                Ok(())
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert_eq!(content.trim(), "/Sh0 sh /Sh1 sh /Sh2 sh");
+        let shadings = resources.get(b"Shading").unwrap().as_dict().unwrap();
+        assert_eq!(shadings.len(), 3);
+        for (key, shading_type) in [(&b"Sh0"[..], 4), (b"Sh1", 5), (b"Sh2", 6)] {
+            let id = shadings.get(key).unwrap().as_reference().unwrap();
+            let Object::Stream(stream) = document.get_object(id).unwrap() else {
+                panic!("a mesh shading is a stream")
+            };
+            assert_eq!(
+                stream.dict.get(b"ShadingType").unwrap().as_i64().unwrap(),
+                shading_type
+            );
+            assert_eq!(
+                stream.dict.get(b"BitsPerCoordinate").unwrap().as_i64().unwrap(),
+                32
+            );
+            assert!(stream.dict.has(b"Decode"));
+            assert!(!stream.content.is_empty());
+        }
+    }
+}
+
+#[test]
+fn pages_without_shadings_have_no_shading_resources() {
+    let (_, document) = build_and_load(true, |context| {
+        let mut page = Page::new();
+        page.add_content(context, None, |c| c.rect(Pt(0.0), Pt(0.0), Pt(1.0), Pt(1.0)))
+            .unwrap();
+        context.add_page(page).unwrap();
+    });
+    let (resources, _) = single_page(&document);
+    assert!(!resources.has(b"Shading"));
+    assert!(!resources.has(b"Pattern"));
 }
 
 #[test]

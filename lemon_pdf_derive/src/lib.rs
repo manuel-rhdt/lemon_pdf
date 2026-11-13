@@ -19,7 +19,8 @@ use syn::{
 /// - `#[rename("Name")]`: the value of the `/Type` key (default: the struct name).
 /// - `#[omit_type(true)]`: don't write a `/Type` key.
 /// - `#[constant(Key = "Value")]`: write the fixed entry `/Key /Value` after `/Type`, for example
-///   `#[constant(Subtype = "Link")]`. Can be repeated.
+///   `#[constant(Subtype = "Link")]`. A number is written as a number: `#[constant(FunctionType
+///   = 2)]` gives `/FunctionType 2`. Can be repeated.
 ///
 /// Field attributes:
 /// - `#[rename("Key")]`: the dictionary key (default: the field name in PascalCase).
@@ -230,8 +231,13 @@ fn impl_pdf_dictionary(ast: &DeriveInput, fields: &FieldsNamed) -> TokenStream {
             .unwrap_or_else(|| to_pascal_case(&name.to_string()));
         quote! { f = f.key_value("Type", &lemon_pdf::object::Name::from_static(#type_name)); }
     };
-    let constants = attr.constants.iter().map(|(key, value)| {
-        quote! { f = f.key_value(#key, &lemon_pdf::object::Name::from_static(#value)); }
+    let constants = attr.constants.iter().map(|(key, value)| match value {
+        ConstantValue::Name(value) => {
+            quote! { f = f.key_value(#key, &lemon_pdf::object::Name::from_static(#value)); }
+        }
+        ConstantValue::Integer(value) => {
+            quote! { f = f.key_value(#key, &#value); }
+        }
     });
 
     let header = impl_header(
@@ -354,7 +360,13 @@ struct StructAttr {
     indirect_variants: bool,
     rename: Option<String>,
     skip_if: Option<Path>,
-    constants: Vec<(String, String)>,
+    constants: Vec<(String, ConstantValue)>,
+}
+
+/// The value of a `#[constant(...)]` entry.
+enum ConstantValue {
+    Name(String),
+    Integer(i64),
 }
 
 /// Parses the attributes of this derive. Malformed attributes are a compile error instead of
@@ -400,8 +412,18 @@ fn parse_attributes(attributes: &[Attribute]) -> StructAttr {
                                 ident,
                                 lit: Lit::Str(value),
                                 ..
-                            })) => result.constants.push((ident.to_string(), value.value())),
-                            _ => panic!("expected `#[constant(Key = \"Value\")]`"),
+                            })) => result
+                                .constants
+                                .push((ident.to_string(), ConstantValue::Name(value.value()))),
+                            NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                                ident,
+                                lit: Lit::Int(value),
+                                ..
+                            })) => result.constants.push((
+                                ident.to_string(),
+                                ConstantValue::Integer(value.value() as i64),
+                            )),
+                            _ => panic!("expected `#[constant(Key = \"Value\")]` or `#[constant(Key = 1)]`"),
                         }
                     }
                 }

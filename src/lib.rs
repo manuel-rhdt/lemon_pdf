@@ -25,13 +25,15 @@ mod document;
 pub mod font;
 pub mod graphics_state;
 pub mod image;
+pub mod mesh;
 pub mod object;
 pub mod pagetree;
+pub mod shading;
 pub mod stream;
 pub mod structure_tree;
 mod trailer;
 
-pub use self::content::Pt;
+pub use self::content::{Matrix, Pt};
 pub use self::object::{IndirectObject, PdfDictionary, PdfFormat};
 pub use self::pagetree::Page;
 pub use crate::document::*;

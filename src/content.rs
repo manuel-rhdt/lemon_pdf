@@ -25,11 +25,33 @@ use crate::object::{
     write_literal_string, Formatter, IndirectReference, Name, PdfFormat, WriteEscaped,
 };
 use crate::pagetree::{Page, ResourceDictionary};
+use crate::shading::{Shading, ShadingPattern};
 use crate::stream::{Stream, StreamEncoder};
 use crate::DocumentContext;
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, PdfFormat)]
 pub struct Pt(pub f64);
+
+/// A transformation matrix `[a b c d e f]` (ISO 32000-1, 8.3.3), as the operands of the `cm`
+/// operator: a point (`x`, `y`) is mapped to (`a*x + c*y + e`, `b*x + d*y + f`).
+#[derive(Debug, Copy, Clone, PartialEq, PdfFormat)]
+pub struct Matrix(pub [f64; 6]);
+
+impl Matrix {
+    pub const IDENTITY: Matrix = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+    pub fn new(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64) -> Self {
+        Matrix([a, b, c, d, e, f])
+    }
+
+    pub fn translation(x: Pt, y: Pt) -> Self {
+        Matrix([1.0, 0.0, 0.0, 1.0, x.0, y.0])
+    }
+
+    pub fn scale(x: f64, y: f64) -> Self {
+        Matrix([x, 0.0, 0.0, y, 0.0, 0.0])
+    }
+}
 
 /// The dictionary of a content stream, which has no entries besides `Length` and `Filter`.
 #[derive(Debug, Default, Clone, PartialEq, PdfDictionary)]
@@ -46,6 +68,9 @@ pub struct PageContext<'page, 'context, 'context_borrow> {
     /// Graphics state parameter dictionaries with their resource names. A `Vec` because
     /// `ExtGState` holds floats and cannot be hashed; pages only use a handful of them.
     pub(crate) ext_g_states: Vec<(ExtGState, Name)>,
+    /// Shadings and shading patterns with their resource names, a `Vec` for the same reason.
+    pub(crate) shadings: Vec<(Shading, Name)>,
+    pub(crate) patterns: Vec<(ShadingPattern, Name)>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -110,6 +135,50 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
 
     pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> Result<()> {
         self.apply_ext_gstate(ExtGState::new().with_blend_mode(blend_mode))
+    }
+
+    /// Adds a shading to the resources of the page and returns its resource name. Adding an
+    /// equal shading again returns the same name.
+    pub fn add_shading(&mut self, shading: impl Into<Shading>) -> Name {
+        let shading = shading.into();
+        if let Some((_, key)) = self.shadings.iter().find(|(other, _)| *other == shading) {
+            return key.clone();
+        }
+        let key = Name::from(format!("Sh{}", self.shadings.len()));
+        self.shadings.push((shading, key.clone()));
+        key
+    }
+
+    /// Paints a shading from `add_shading` (`sh` operator) everywhere inside of the current
+    /// clipping path, in the current user space. Clip to the shape that is to be painted first
+    /// (see `clip`), inside of a saved graphics state.
+    pub fn paint_shading(&mut self, key: &Name) -> Result<()> {
+        self.write_operation1(key, "sh")
+    }
+
+    /// Adds a shading pattern to the resources of the page and returns its resource name.
+    /// Adding an equal pattern again returns the same name.
+    pub fn add_shading_pattern(&mut self, pattern: ShadingPattern) -> Name {
+        if let Some((_, key)) = self.patterns.iter().find(|(other, _)| *other == pattern) {
+            return key.clone();
+        }
+        let key = Name::from(format!("P{}", self.patterns.len()));
+        self.patterns.push((pattern, key.clone()));
+        key
+    }
+
+    /// Makes fills use a pattern from `add_shading_pattern` as their color
+    /// (`/Pattern cs` and `scn` operators).
+    pub fn set_fill_pattern(&mut self, key: &Name) -> Result<()> {
+        self.write_operation1(Name::from("Pattern"), "cs")?;
+        self.write_operation1(key, "scn")
+    }
+
+    /// Makes strokes use a pattern from `add_shading_pattern` as their color
+    /// (`/Pattern CS` and `SCN` operators).
+    pub fn set_stroke_pattern(&mut self, key: &Name) -> Result<()> {
+        self.write_operation1(Name::from("Pattern"), "CS")?;
+        self.write_operation1(key, "SCN")
     }
 
     /// Paints an XObject from `add_xobject` (`Do` operator) in the current user space.
@@ -372,6 +441,16 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
                 .ext_g_states
                 .into_iter()
                 .map(|(state, key)| (key, state))
+                .collect(),
+            shading: self
+                .shadings
+                .into_iter()
+                .map(|(shading, key)| (key, shading))
+                .collect(),
+            pattern: self
+                .patterns
+                .into_iter()
+                .map(|(pattern, key)| (key, pattern))
                 .collect(),
         };
         self.page.resources = Some(resources);
