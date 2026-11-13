@@ -20,7 +20,9 @@ use std::io::BufWriter;
 
 use lemon_pdf::graphics_state::FillRule;
 use lemon_pdf::pagetree::Page;
-use lemon_pdf::shading::{Circle, ColorStop, Gradient, Rgb, Shading, ShadingPattern};
+use lemon_pdf::shading::{
+    AxialShading, Circle, ColorStop, Gradient, Point, RadialShading, Rgb, ShadingPattern,
+};
 use lemon_pdf::stream::StreamFilter;
 use lemon_pdf::{DocumentContext, Pt, Version};
 
@@ -43,9 +45,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     ])?
     .extended();
 
-    let axial = Shading::axial(
-        (Pt(50.0), Pt(0.0)),
-        (Pt(450.0), Pt(0.0)),
+    let axial = AxialShading::new(
+        Point::new(50.0, 0.0),
+        Point::new(450.0, 0.0),
         &rainbow.clone().extended(),
     );
     let circle = |radius| Circle {
@@ -53,8 +55,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         y: Pt(580.0),
         radius: Pt(radius),
     };
-    let radial = Shading::radial(circle(0.0), circle(70.0), &rainbow);
-    let hard = Shading::axial((Pt(260.0), Pt(510.0)), (Pt(440.0), Pt(650.0)), &split);
+    let radial = RadialShading::new(circle(0.0), circle(70.0), &rainbow);
+    let hard = AxialShading::new(Point::new(260.0, 510.0), Point::new(440.0, 650.0), &split);
 
     let mut page = Page::new();
     page.add_content(&mut context, Some(StreamFilter::Deflate), |c| {

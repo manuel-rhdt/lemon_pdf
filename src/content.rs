@@ -139,7 +139,8 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
 
     /// Adds a shading to the resources of the page and returns its resource name. Adding an
     /// equal shading again returns the same name.
-    pub fn add_shading(&mut self, shading: Shading) -> Name {
+    pub fn add_shading(&mut self, shading: impl Into<Shading>) -> Name {
+        let shading = shading.into();
         if let Some((_, key)) = self.shadings.iter().find(|(other, _)| *other == shading) {
             return key.clone();
         }

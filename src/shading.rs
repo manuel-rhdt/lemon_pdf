@@ -22,8 +22,9 @@
 //! The colors of a gradient have a type ([`Gray`], [`Rgb`] or [`Cmyk`]) that decides the color
 //! space of the shading, so all colors of a gradient are in the same one.
 //!
-//! Both kinds of shading in this module have a single color per position, so they cannot be
-//! transparent. Shadings of other types (function based, mesh) are not supported.
+//! The shadings in this module have a single color per position, so they cannot be
+//! transparent. Mesh shadings (types 4 to 7) are in the [`mesh`](crate::mesh) module; function-based
+//! shadings (type 1) are not supported.
 
 use std::fmt;
 
@@ -32,6 +33,8 @@ use lemon_pdf_derive::PdfFormat;
 use crate as lemon_pdf;
 use crate::content::{Matrix, Pt};
 use crate::image::ColorSpace;
+use crate::mesh::MeshShading;
+use crate::object::IndirectReference;
 
 /// An error from building a function or a gradient.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,6 +250,19 @@ impl<C: Color> Gradient<C> {
     }
 }
 
+/// A position in the user space.
+#[derive(Debug, Copy, Clone, Default, PartialEq)]
+pub struct Point {
+    pub x: Pt,
+    pub y: Pt,
+}
+
+impl Point {
+    pub fn new(x: f64, y: f64) -> Self {
+        Point { x: Pt(x), y: Pt(y) }
+    }
+}
+
 /// A circle by its center and radius.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Circle {
@@ -255,49 +271,15 @@ pub struct Circle {
     pub radius: Pt,
 }
 
-/// A shading (ISO 32000-1, 8.7.4.3).
-#[derive(Debug, Clone, PartialEq, PdfFormat)]
+/// A shading (ISO 32000-1, 8.7.4.3). `AxialShading` and `RadialShading` convert into it
+/// (`.into()`).
+#[derive(Debug, Clone, PartialEq, From, PdfFormat)]
 pub enum Shading {
     Axial(AxialShading),
     Radial(RadialShading),
-}
-
-impl Shading {
-    /// A shading that changes along the line from `from` to `to` in the user space it is
-    /// painted in: it has the color of the first stop at the start and the color of the last
-    /// stop at the end, and is constant across the line.
-    pub fn axial<C: Color>(from: (Pt, Pt), to: (Pt, Pt), gradient: &Gradient<C>) -> Shading {
-        Shading::Axial(AxialShading {
-            color_space: C::SPACE,
-            background: gradient.background.map(|color| color.components()),
-            bbox: None,
-            coords: [from.0, from.1, to.0, to.1],
-            function: gradient.function.clone(),
-            extend: [gradient.extend; 2],
-        })
-    }
-
-    /// A shading between two circles: the color of the first stop is at `start`, the one of the
-    /// last stop at `end`, and the circles in between are interpolated.
-    pub fn radial<C: Color>(start: Circle, end: Circle, gradient: &Gradient<C>) -> Shading {
-        Shading::Radial(RadialShading {
-            color_space: C::SPACE,
-            background: gradient.background.map(|color| color.components()),
-            bbox: None,
-            coords: [start.x, start.y, start.radius, end.x, end.y, end.radius],
-            function: gradient.function.clone(),
-            extend: [gradient.extend; 2],
-        })
-    }
-
-    /// Limits the shading to a rectangle (`x0`, `y0`, `x1`, `y1`) of the space it is painted in.
-    pub fn with_bbox(mut self, bbox: [Pt; 4]) -> Self {
-        match &mut self {
-            Shading::Axial(shading) => shading.bbox = Some(bbox),
-            Shading::Radial(shading) => shading.bbox = Some(bbox),
-        }
-        self
-    }
+    /// A mesh shading, which is a stream of its own: write it with
+    /// `DocumentContext::write_mesh_shading`.
+    Mesh(IndirectReference<MeshShading>),
 }
 
 /// An axial shading (type 2).
@@ -314,6 +296,28 @@ pub struct AxialShading {
     extend: [bool; 2],
 }
 
+impl AxialShading {
+    /// A shading that changes along the line from `from` to `to` in the user space it is
+    /// painted in: it has the color of the first stop at the start and the color of the last
+    /// stop at the end, and is constant across the line.
+    pub fn new<C: Color>(from: Point, to: Point, gradient: &Gradient<C>) -> Self {
+        AxialShading {
+            color_space: C::SPACE,
+            background: gradient.background.map(|color| color.components()),
+            bbox: None,
+            coords: [from.x, from.y, to.x, to.y],
+            function: gradient.function.clone(),
+            extend: [gradient.extend; 2],
+        }
+    }
+
+    /// Limits the shading to a rectangle (`x0`, `y0`, `x1`, `y1`) of the space it is painted in.
+    pub fn with_bbox(mut self, bbox: [Pt; 4]) -> Self {
+        self.bbox = Some(bbox);
+        self
+    }
+}
+
 /// A radial shading (type 3).
 #[derive(Debug, Clone, PartialEq, PdfFormat)]
 #[omit_type(true)]
@@ -326,6 +330,27 @@ pub struct RadialShading {
     coords: [Pt; 6],
     function: Function,
     extend: [bool; 2],
+}
+
+impl RadialShading {
+    /// A shading between two circles: the color of the first stop is at `start`, the one of the
+    /// last stop at `end`, and the circles in between are interpolated.
+    pub fn new<C: Color>(start: Circle, end: Circle, gradient: &Gradient<C>) -> Self {
+        RadialShading {
+            color_space: C::SPACE,
+            background: gradient.background.map(|color| color.components()),
+            bbox: None,
+            coords: [start.x, start.y, start.radius, end.x, end.y, end.radius],
+            function: gradient.function.clone(),
+            extend: [gradient.extend; 2],
+        }
+    }
+
+    /// Limits the shading to a rectangle (`x0`, `y0`, `x1`, `y1`) of the space it is painted in.
+    pub fn with_bbox(mut self, bbox: [Pt; 4]) -> Self {
+        self.bbox = Some(bbox);
+        self
+    }
 }
 
 /// A shading pattern (ISO 32000-1, 8.7.4.2): a shading used as the color of fills and strokes.
@@ -342,9 +367,9 @@ pub struct ShadingPattern {
 }
 
 impl ShadingPattern {
-    pub fn new(shading: Shading) -> Self {
+    pub fn new(shading: impl Into<Shading>) -> Self {
         ShadingPattern {
-            shading,
+            shading: shading.into(),
             matrix: None,
         }
     }
@@ -375,8 +400,8 @@ mod tests {
         ColorStop::new(offset, Gray(level))
     }
 
-    fn pt(x: f64, y: f64) -> (Pt, Pt) {
-        (Pt(x), Pt(y))
+    fn pt(x: f64, y: f64) -> Point {
+        Point::new(x, y)
     }
 
     #[test]
@@ -472,12 +497,12 @@ mod tests {
     #[test]
     fn the_color_type_decides_the_color_space() {
         let spaces = [
-            written(&Shading::axial(
+            written(&AxialShading::new(
                 pt(0.0, 0.0),
                 pt(1.0, 0.0),
                 &Gradient::new(&[gray(0.0, 0.0)]).unwrap(),
             )),
-            written(&Shading::axial(
+            written(&AxialShading::new(
                 pt(0.0, 0.0),
                 pt(1.0, 0.0),
                 &Gradient::new(&[ColorStop::new(0.0, Cmyk(0.0, 0.0, 0.0, 1.0))]).unwrap(),
@@ -496,7 +521,7 @@ mod tests {
         ])
         .unwrap()
         .extended();
-        let output = written(&Shading::axial(pt(10.0, 20.0), pt(110.0, 20.0), &gradient));
+        let output = written(&AxialShading::new(pt(10.0, 20.0), pt(110.0, 20.0), &gradient));
         assert!(output.contains("/ShadingType 2"), "{}", output);
         assert!(output.contains("/ColorSpace /DeviceRGB"), "{}", output);
         assert!(output.contains("/Coords [ 10 20 110 20 ]"), "{}", output);
@@ -516,7 +541,7 @@ mod tests {
             y: Pt(50.0),
             radius: Pt(radius),
         };
-        let shading = Shading::radial(circle(0.0), circle(40.0), &gradient)
+        let shading = RadialShading::new(circle(0.0), circle(40.0), &gradient)
             .with_bbox([Pt(0.0), Pt(0.0), Pt(100.0), Pt(100.0)]);
         let output = written(&shading);
         assert!(output.contains("/ShadingType 3"), "{}", output);
@@ -529,7 +554,7 @@ mod tests {
     #[test]
     fn shading_pattern_is_written() {
         let gradient = Gradient::new(&[gray(0.0, 0.0), gray(1.0, 1.0)]).unwrap();
-        let shading = Shading::axial(pt(0.0, 0.0), pt(1.0, 0.0), &gradient);
+        let shading = AxialShading::new(pt(0.0, 0.0), pt(1.0, 0.0), &gradient);
         let pattern = ShadingPattern::new(shading)
             .with_matrix(Matrix::new(2.0, 0.0, 0.0, 2.0, 5.0, 6.0));
         let output = written(&pattern);

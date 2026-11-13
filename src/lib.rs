@@ -25,6 +25,7 @@ mod document;
 pub mod font;
 pub mod graphics_state;
 pub mod image;
+pub mod mesh;
 pub mod object;
 pub mod pagetree;
 pub mod shading;

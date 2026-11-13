@@ -15,7 +15,10 @@ use lemon_pdf::annotation::{Annotation, LinkAction, LinkAnnotation, UriAction};
 use lemon_pdf::font::builtin::BuiltInFont;
 use lemon_pdf::graphics_state::{BlendMode, FillRule, LineCap, LineJoin};
 use lemon_pdf::image::Image;
-use lemon_pdf::shading::{Circle, ColorStop, Gradient, Gray, Rgb, Shading, ShadingPattern};
+use lemon_pdf::mesh::{CoonsMesh, FreeFormMesh, LatticeMesh, Patch, Vertex};
+use lemon_pdf::shading::{
+    AxialShading, Circle, ColorStop, Gradient, Gray, Point, RadialShading, Rgb, ShadingPattern,
+};
 use lemon_pdf::font::encoding::{EncodingEntry, PredefinedEncoding};
 use lemon_pdf::font::Font;
 use lemon_pdf::dictionary::Dictionary;
@@ -773,9 +776,9 @@ fn transparency_is_set_through_ext_gstate() {
 fn shadings_and_patterns_are_resources() {
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
-            let axial = Shading::axial(
-                (Pt(0.0), Pt(0.0)),
-                (Pt(100.0), Pt(0.0)),
+            let axial = AxialShading::new(
+                Point::new(0.0, 0.0),
+                Point::new(100.0, 0.0),
                 &Gradient::new(&[
                     ColorStop::new(0.0, Rgb(1.0, 0.0, 0.0)),
                     ColorStop::new(0.5, Rgb(1.0, 1.0, 0.0)),
@@ -789,7 +792,7 @@ fn shadings_and_patterns_are_resources() {
                 y: Pt(50.0),
                 radius: Pt(radius),
             };
-            let radial = Shading::radial(
+            let radial = RadialShading::new(
                 circle(0.0),
                 circle(50.0),
                 &Gradient::new(&[ColorStop::new(0.0, Gray(1.0)), ColorStop::new(1.0, Gray(0.0))])
@@ -843,6 +846,74 @@ fn shadings_and_patterns_are_resources() {
         assert_eq!(pattern.get(b"PatternType").unwrap().as_i64().unwrap(), 2);
         assert!(pattern.get(b"Shading").unwrap().as_dict().is_ok());
         assert_eq!(pattern.get(b"Matrix").unwrap().as_array().unwrap().len(), 6);
+    }
+}
+
+#[test]
+fn mesh_shadings_are_streams_referenced_from_the_resources() {
+    let red = |x: f64, y: f64| Vertex::new(x, y, Rgb(1.0, 0.0, 0.0));
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let triangles = context
+                .write_mesh_shading(&FreeFormMesh::new([
+                    red(0.0, 0.0),
+                    red(10.0, 0.0),
+                    red(0.0, 10.0),
+                ]))
+                .unwrap();
+            let lattice = context
+                .write_mesh_shading(
+                    &LatticeMesh::new(vec![
+                        vec![red(0.0, 0.0), red(1.0, 0.0)],
+                        vec![red(0.0, 1.0), red(1.0, 1.0)],
+                    ])
+                    .unwrap(),
+                )
+                .unwrap();
+            let mut points = [Point::default(); 12];
+            for (i, point) in points.iter_mut().enumerate() {
+                *point = Point::new(i as f64, 0.0);
+            }
+            let coons = context
+                .write_mesh_shading(&CoonsMesh::new(Patch {
+                    points,
+                    colors: [Gray(0.0); 4],
+                }))
+                .unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                for shading in [triangles.clone(), lattice, coons] {
+                    let key = c.add_shading(shading);
+                    c.paint_shading(&key)?;
+                }
+                // an equal shading shares its name
+                assert_eq!(c.add_shading(triangles.clone()), c.add_shading(triangles.clone()));
+                Ok(())
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert_eq!(content.trim(), "/Sh0 sh /Sh1 sh /Sh2 sh");
+        let shadings = resources.get(b"Shading").unwrap().as_dict().unwrap();
+        assert_eq!(shadings.len(), 3);
+        for (key, shading_type) in [(&b"Sh0"[..], 4), (b"Sh1", 5), (b"Sh2", 6)] {
+            let id = shadings.get(key).unwrap().as_reference().unwrap();
+            let Object::Stream(stream) = document.get_object(id).unwrap() else {
+                panic!("a mesh shading is a stream")
+            };
+            assert_eq!(
+                stream.dict.get(b"ShadingType").unwrap().as_i64().unwrap(),
+                shading_type
+            );
+            assert_eq!(
+                stream.dict.get(b"BitsPerCoordinate").unwrap().as_i64().unwrap(),
+                32
+            );
+            assert!(stream.dict.has(b"Decode"));
+            assert!(!stream.content.is_empty());
+        }
     }
 }
 
