@@ -25,7 +25,8 @@ use crate::content::{ContentStream, PageContext};
 use crate::document::DocumentContext;
 use crate::font::Font;
 use crate::graphics_state::ExtGState;
-use crate::shading::{Shading, ShadingPattern};
+use crate::pattern::Pattern;
+use crate::shading::Shading;
 use crate::image::XObject;
 use crate::object::{IndirectReference, Name, Object, Value};
 use crate::stream::{StreamEncoder, StreamFilter};
@@ -68,7 +69,7 @@ pub struct ResourceDictionary {
     #[skip_if("BTreeMap::is_empty")]
     pub shading: BTreeMap<Name, Shading>,
     #[skip_if("BTreeMap::is_empty")]
-    pub pattern: BTreeMap<Name, ShadingPattern>,
+    pub pattern: BTreeMap<Name, Pattern>,
 }
 
 /// A convenience struct to create PDF pages.

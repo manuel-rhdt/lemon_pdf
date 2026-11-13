@@ -1056,3 +1056,53 @@ fn vector_path_operators_are_written() {
          0 0 5 5 re W n [ ] 0 d"
     );
 }
+
+#[test]
+fn tiling_patterns_repeat_a_cell() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let pattern = context
+                .write_tiling_pattern(
+                    [Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0)],
+                    Pt(12.0),
+                    Pt(14.0),
+                    lemon_pdf::content::Matrix::new(1.0, 0.0, 0.0, 1.0, 5.0, 6.0),
+                    None,
+                    |c| {
+                        c.device_rgb_fill_color(1.0, 0.0, 0.0)?;
+                        c.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
+                        c.fill_path()
+                    },
+                )
+                .unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                let key = c.add_tiling_pattern(pattern);
+                assert_eq!(c.add_tiling_pattern(pattern), key, "added twice");
+                c.set_fill_pattern(&key)?;
+                c.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
+                c.fill_path()
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert!(content.contains("/Pattern cs /P0 scn"), "{}", content);
+        let patterns = resources.get(b"Pattern").unwrap().as_dict().unwrap();
+        let id = patterns.get(b"P0").unwrap().as_reference().unwrap();
+        let Object::Stream(pattern) = document.get_object(id).unwrap() else {
+            panic!("a tiling pattern is a stream")
+        };
+        let dict = &pattern.dict;
+        assert_eq!(dict.get(b"PatternType").unwrap().as_i64().unwrap(), 1);
+        assert_eq!(dict.get(b"PaintType").unwrap().as_i64().unwrap(), 1);
+        assert_eq!(dict.get(b"TilingType").unwrap().as_i64().unwrap(), 1);
+        assert_eq!(dict.get(b"XStep").unwrap().as_float().unwrap(), 12.0);
+        assert_eq!(dict.get(b"YStep").unwrap().as_float().unwrap(), 14.0);
+        assert_eq!(dict.get(b"BBox").unwrap().as_array().unwrap().len(), 4);
+        assert_eq!(dict.get(b"Matrix").unwrap().as_array().unwrap().len(), 6);
+        assert!(dict.has(b"Resources"));
+        assert!(String::from_utf8_lossy(&pattern.content).contains("1 0 0 rg"));
+    }
+}
