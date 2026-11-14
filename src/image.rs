@@ -391,12 +391,24 @@ impl PdfFormat for ImageColorSpace {
 
 /// The `DecodeParms` of a PNG predictor (ISO 32000-1, Table 8): the rows start with a filter
 /// type byte, as in a PNG file (`Predictor` 15).
-#[derive(Debug, Clone, PartialEq, PdfFormat)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PngPredictor {
     pub predictor: u32,
     pub colors: u32,
     pub bits_per_component: u32,
     pub columns: u32,
+}
+
+impl PdfFormat for PngPredictor {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        output
+            .format_dictionary()
+            .key_value("Predictor", &self.predictor)
+            .key_value("Colors", &self.colors)
+            .key_value("BitsPerComponent", &self.bits_per_component)
+            .key_value("Columns", &self.columns)
+            .finish()
+    }
 }
 
 fn is_false(value: &bool) -> bool {
