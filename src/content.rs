@@ -27,6 +27,7 @@ use crate::object::{
 use crate::form::{FormDict, FormXObject, TransparencyGroup};
 use crate::pagetree::{Page, ResourceDictionary};
 use crate::stream::StreamFilter;
+use crate::pattern::{Pattern, TilingPattern, TilingPatternDict};
 use crate::shading::{Shading, ShadingPattern};
 use crate::stream::{Stream, StreamEncoder};
 use crate::DocumentContext;
@@ -72,7 +73,7 @@ pub struct PageContext<'page, 'context, 'context_borrow> {
     pub(crate) ext_g_states: Vec<(ExtGState, Name)>,
     /// Shadings and shading patterns with their resource names, a `Vec` for the same reason.
     pub(crate) shadings: Vec<(Shading, Name)>,
-    pub(crate) patterns: Vec<(ShadingPattern, Name)>,
+    pub(crate) patterns: Vec<(Pattern, Name)>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -161,6 +162,16 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     /// Adds a shading pattern to the resources of the page and returns its resource name.
     /// Adding an equal pattern again returns the same name.
     pub fn add_shading_pattern(&mut self, pattern: ShadingPattern) -> Name {
+        self.add_pattern(pattern.into())
+    }
+
+    /// Adds a tiling pattern from `DocumentContext::write_tiling_pattern` to the resources of
+    /// the page and returns its resource name.
+    pub fn add_tiling_pattern(&mut self, pattern: IndirectReference<TilingPattern>) -> Name {
+        self.add_pattern(pattern.into())
+    }
+
+    fn add_pattern(&mut self, pattern: Pattern) -> Name {
         if let Some((_, key)) = self.patterns.iter().find(|(other, _)| *other == pattern) {
             return key.clone();
         }
@@ -169,7 +180,7 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         key
     }
 
-    /// Makes fills use a pattern from `add_shading_pattern` as their color
+    /// Makes fills use a pattern from `add_shading_pattern` or `add_tiling_pattern` as their color
     /// (`/Pattern cs` and `scn` operators).
     pub fn set_fill_pattern(&mut self, key: &Name) -> Result<()> {
         self.write_operation1(Name::from("Pattern"), "cs")?;
@@ -480,6 +491,44 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
 }
 
 impl<'context> DocumentContext<'context> {
+    /// Writes a tiling pattern (ISO 32000-1, 8.7.3) and returns a reference to it.
+    ///
+    /// `content` draws one cell like a page, in pattern space; everything outside of `bbox`
+    /// (`[xmin, ymin, xmax, ymax]`) is clipped. The cell is repeated every `x_step` and `y_step`
+    /// in pattern space. `matrix` maps pattern space to the default coordinate system of the
+    /// page, which does not depend on the transformations applied while the page is drawn.
+    pub fn write_tiling_pattern(
+        &mut self,
+        bbox: [Pt; 4],
+        x_step: Pt,
+        y_step: Pt,
+        matrix: Matrix,
+        stream_filter: Option<StreamFilter>,
+        content: impl FnOnce(&mut PageContext<'_, 'context, '_>) -> Result<()>,
+    ) -> Result<IndirectReference<TilingPattern>> {
+        let mut page = Page::new();
+        let mut context = PageContext {
+            fonts: HashMap::new(),
+            x_objects: HashMap::new(),
+            ext_g_states: Vec::new(),
+            shadings: Vec::new(),
+            patterns: Vec::new(),
+            content_stream: StreamEncoder::new(stream_filter),
+            page: &mut page,
+            pdf_context: self,
+        };
+        content(&mut context)?;
+        let (resources, encoder, _, _) = context.into_parts();
+        let dict = TilingPatternDict {
+            bbox,
+            x_step,
+            y_step,
+            resources,
+            matrix: Some(matrix),
+        };
+        self.write_object(Stream::from_encoder(dict, encoder)?)
+    }
+
     /// Writes a form XObject (ISO 32000-1, 8.10) and returns a reference to it.
     ///
     /// `content` draws the form like a page, in form space; everything outside of `bbox`
