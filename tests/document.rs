@@ -1106,3 +1106,57 @@ fn tiling_patterns_repeat_a_cell() {
         assert!(String::from_utf8_lossy(&pattern.content).contains("1 0 0 rg"));
     }
 }
+
+/// A PNG file of 3 x 2 palette pixels whose palette entry 1 is transparent.
+fn small_palette_png() -> Vec<u8> {
+    fn chunk(out: &mut Vec<u8>, kind: &[u8], body: &[u8]) {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        out.extend_from_slice(kind);
+        out.extend_from_slice(body);
+        out.extend_from_slice(&[0; 4]);
+    }
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    chunk(&mut png, b"IHDR", &[0, 0, 0, 3, 0, 0, 0, 2, 8, 3, 0, 0, 0]);
+    chunk(&mut png, b"PLTE", &[255, 0, 0, 0, 255, 0]);
+    chunk(&mut png, b"tRNS", &[255, 0]);
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, &[0, 0, 1, 0, 0, 1, 0, 1]).unwrap();
+    chunk(&mut png, b"IDAT", &encoder.finish().unwrap());
+    chunk(&mut png, b"IEND", &[]);
+    png
+}
+
+#[test]
+fn png_pixel_data_is_embedded_unchanged() {
+    let png = small_palette_png();
+    for &mode in &MODES {
+        let mut reference = None;
+        let (_, document) = build_and_load(mode, |context| {
+            let image = Image::from_png(&png).unwrap();
+            assert_eq!((image.width(), image.height()), (3, 2));
+            reference = Some(context.write_image(image).unwrap());
+        });
+        let image = document.get_object(id(reference.unwrap())).unwrap();
+        let image = image.as_stream().unwrap();
+        assert_eq!(name(image.dict.get(b"Filter").unwrap()), "FlateDecode");
+        // `[/Indexed /DeviceRGB 1 <FF000000FF00>]`
+        let space = image.dict.get(b"ColorSpace").unwrap().as_array().unwrap();
+        assert_eq!(name(&space[0]), "Indexed");
+        assert_eq!(name(&space[1]), "DeviceRGB");
+        assert_eq!(space[2].as_i64().unwrap(), 1);
+        assert_eq!(space[3].as_str().unwrap(), &[255, 0, 0, 0, 255, 0]);
+        assert_eq!(image.dict.get(b"BitsPerComponent").unwrap().as_i64().unwrap(), 8);
+        let parms = image.dict.get(b"DecodeParms").unwrap().as_dict().unwrap();
+        assert_eq!(parms.get(b"Predictor").unwrap().as_i64().unwrap(), 15);
+        assert_eq!(parms.get(b"Colors").unwrap().as_i64().unwrap(), 1);
+        assert_eq!(parms.get(b"Columns").unwrap().as_i64().unwrap(), 3);
+        let mask = image.dict.get(b"Mask").unwrap().as_array().unwrap();
+        assert_eq!(
+            mask.iter().map(|v| v.as_i64().unwrap()).collect::<Vec<_>>(),
+            [1, 1]
+        );
+        // the stream is the zlib data of the PNG file, not recompressed
+        let idat_start = png.windows(4).position(|w| w == b"IDAT").unwrap() + 4;
+        assert!(png[idat_start..].starts_with(&image.content));
+    }
+}
