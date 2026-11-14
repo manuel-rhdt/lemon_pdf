@@ -23,6 +23,7 @@ mod crossref;
 pub mod dictionary;
 mod document;
 pub mod font;
+pub mod form;
 pub mod graphics_state;
 pub mod image;
 pub mod mesh;

@@ -13,7 +13,9 @@ use lopdf::{Document, Object, ObjectId};
 
 use lemon_pdf::annotation::{Annotation, LinkAction, LinkAnnotation, UriAction};
 use lemon_pdf::font::builtin::BuiltInFont;
-use lemon_pdf::graphics_state::{BlendMode, FillRule, LineCap, LineJoin};
+use lemon_pdf::form::TransparencyGroup;
+use lemon_pdf::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin, SoftMask};
+use lemon_pdf::image::ColorSpace;
 use lemon_pdf::image::Image;
 use lemon_pdf::mesh::{CoonsMesh, FreeFormMesh, LatticeMesh, Patch, Vertex};
 use lemon_pdf::shading::{
@@ -914,6 +916,100 @@ fn mesh_shadings_are_streams_referenced_from_the_resources() {
             assert!(stream.dict.has(b"Decode"));
             assert!(!stream.content.is_empty());
         }
+    }
+}
+
+#[test]
+fn soft_masks_are_forms_in_the_graphics_state() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            // a mask that fades from transparent to opaque
+            let fade = Gradient::new(&[ColorStop::new(0.0, Gray(0.0)), ColorStop::new(1.0, Gray(1.0))])
+                .unwrap()
+                .extended();
+            let shading = AxialShading::new(Point::new(0.0, 0.0), Point::new(100.0, 0.0), &fade);
+            let mask = context
+                .write_form(
+                    [Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0)],
+                    Some(TransparencyGroup::new(ColorSpace::DeviceGray)),
+                    None,
+                    |c| {
+                        let key = c.add_shading(shading);
+                        c.paint_shading(&key)
+                    },
+                )
+                .unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                c.apply_ext_gstate(ExtGState::new().with_soft_mask(SoftMask::luminosity(mask)))?;
+                c.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
+                c.fill_path()?;
+                c.apply_ext_gstate(ExtGState::new().with_soft_mask(SoftMask::None))
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+
+        let (resources, content) = single_page(&document);
+        assert_eq!(content.split_whitespace().filter(|t| *t == "gs").count(), 2);
+        let states = resources.get(b"ExtGState").unwrap().as_dict().unwrap();
+        assert_eq!(states.len(), 2);
+        let mut masks = 0;
+        for (_, state) in states.iter() {
+            let state = state.as_dict().unwrap();
+            match state.get(b"SMask").unwrap() {
+                Object::Name(name) => assert_eq!(name, b"None"),
+                Object::Dictionary(mask) => {
+                    masks += 1;
+                    assert_eq!(mask.get(b"Type").unwrap().as_name().unwrap(), b"Mask");
+                    assert_eq!(mask.get(b"S").unwrap().as_name().unwrap(), b"Luminosity");
+                    let id = mask.get(b"G").unwrap().as_reference().unwrap();
+                    let Object::Stream(form) = document.get_object(id).unwrap() else {
+                        panic!("the group of a soft mask is a form")
+                    };
+                    assert_eq!(form.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Form");
+                    assert_eq!(form.dict.get(b"BBox").unwrap().as_array().unwrap().len(), 4);
+                    let group = form.dict.get(b"Group").unwrap().as_dict().unwrap();
+                    assert_eq!(group.get(b"S").unwrap().as_name().unwrap(), b"Transparency");
+                    assert_eq!(group.get(b"CS").unwrap().as_name().unwrap(), b"DeviceGray");
+                    // the form has resources of its own
+                    let form_resources = form.dict.get(b"Resources").unwrap().as_dict().unwrap();
+                    assert_eq!(form_resources.get(b"Shading").unwrap().as_dict().unwrap().len(), 1);
+                    assert_eq!(String::from_utf8_lossy(&form.content).trim(), "/Sh0 sh");
+                }
+                other => panic!("unexpected soft mask {:?}", other),
+            }
+        }
+        assert_eq!(masks, 1);
+    }
+}
+
+#[test]
+fn forms_can_be_painted_as_xobjects() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let form = context
+                .write_form([Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0)], None, None, |c| {
+                    c.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
+                    c.fill_path()
+                })
+                .unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                let key = c.add_xobject(form);
+                c.draw_xobject(&key)
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let (resources, content) = single_page(&document);
+        assert_eq!(content.trim(), "/X0 Do");
+        let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+        let id = xobjects.get(b"X0").unwrap().as_reference().unwrap();
+        let Object::Stream(form) = document.get_object(id).unwrap() else { panic!() };
+        assert_eq!(form.dict.get(b"Subtype").unwrap().as_name().unwrap(), b"Form");
+        assert!(!form.dict.has(b"Group"));
+        assert!(!form.dict.has(b"Matrix"));
     }
 }
 
