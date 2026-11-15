@@ -396,15 +396,54 @@ pub(crate) fn sanitize_real(value: f64) -> f64 {
     }
 }
 
-/// Writes a real number with at most two decimals, without trailing zeros
-/// (`20.00` becomes `20`, `-41.50` becomes `-41.5`) to keep content streams small.
-fn write_trimmed_real(output: &mut Formatter, value: f64) -> Result<()> {
-    let formatted = format!("{:.2}", sanitize_real(value));
-    let trimmed = formatted.trim_end_matches('0').trim_end_matches('.');
-    match trimmed {
-        "" | "-" | "-0" => write!(output, "0"),
-        other => write!(output, "{}", other),
+/// A string that lives on the stack, for formatting a number without allocating. Writing more
+/// than its capacity is an error.
+struct StackString {
+    bytes: [u8; 64],
+    len: usize,
+}
+
+impl StackString {
+    fn new() -> Self {
+        StackString { bytes: [0; 64], len: 0 }
     }
+
+    fn as_str(&self) -> &str {
+        // only whole `&str`s are copied in
+        std::str::from_utf8(&self.bytes[..self.len]).expect("the bytes are valid UTF-8")
+    }
+}
+
+impl std::fmt::Write for StackString {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        let end = self.len + s.len();
+        if end > self.bytes.len() {
+            return Err(std::fmt::Error);
+        }
+        self.bytes[self.len..end].copy_from_slice(s.as_bytes());
+        self.len = end;
+        Ok(())
+    }
+}
+
+/// `value` with two decimals and without trailing zeros, in `buffer` (`20.00` becomes `20`,
+/// `-41.50` becomes `-41.5`). The largest value, `MAX_REAL`, has 39 digits before the point.
+fn trimmed_real<'a>(buffer: &'a mut StackString, value: f64) -> &'a str {
+    use std::fmt::Write as _;
+    write!(buffer, "{:.2}", sanitize_real(value)).expect("a real number has fewer than 64 characters");
+    let trimmed = buffer.as_str().trim_end_matches('0').trim_end_matches('.');
+    match trimmed {
+        "" | "-" | "-0" => "0",
+        other => other,
+    }
+}
+
+/// Writes a real number with at most two decimals, without trailing zeros
+/// (`20.00` becomes `20`, `-41.50` becomes `-41.5`) to keep content streams small. A content
+/// stream has hundreds of thousands of numbers, so this does not allocate.
+fn write_trimmed_real(output: &mut Formatter, value: f64) -> Result<()> {
+    let mut buffer = StackString::new();
+    output.write_all(trimmed_real(&mut buffer, value).as_bytes())
 }
 
 impl PdfFormat for f32 {
@@ -624,6 +663,34 @@ mod test {
         assert_eq!(written(&-0.0f64), "0");
         assert_eq!(written(&-0.001f64), "0");
         assert_eq!(written(&1e10f64), "10000000000");
+    }
+
+    /// The way reals were written before they were formatted on the stack.
+    fn reference(value: f64) -> String {
+        let formatted = format!("{:.2}", sanitize_real(value));
+        match formatted.trim_end_matches('0').trim_end_matches('.') {
+            "" | "-" | "-0" => "0".to_owned(),
+            other => other.to_owned(),
+        }
+    }
+
+    #[test]
+    fn reals_are_written_like_formatted_strings() {
+        let mut values = vec![
+            0.0, -0.0, 0.004, 0.005, -0.004, -0.005, 0.994, 0.995, 9.995, 99.995, 0.1, 0.01, 1.0 / 3.0, -2.0 / 3.0,
+            1e-9, -1e-9, 1e5, 123456789.125, -123456789.125, 1e15, -1e15, 1e30, MAX_REAL, -MAX_REAL, f64::MIN_POSITIVE,
+            f64::INFINITY, f64::NEG_INFINITY, f64::NAN, f64::MAX, f64::MIN,
+        ];
+        // a spread of values with different numbers of digits
+        let mut x = 0.123456789f64;
+        for _ in 0..2000 {
+            x = (x * 7.31 + 0.017).fract();
+            values.push((x - 0.5) * 10f64.powi((x * 12.0) as i32 - 3));
+        }
+        for value in values {
+            assert_eq!(written(&value), reference(value), "{value:e}");
+            assert_eq!(written(&(value as f32)), reference(value as f32 as f64), "{value:e} as f32");
+        }
     }
 
     #[test]
