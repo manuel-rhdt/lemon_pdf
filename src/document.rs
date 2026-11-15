@@ -45,6 +45,8 @@ impl Version {
 #[derive(Debug)]
 pub(crate) struct OffsetTrackingWriter<T> {
     offset: u64,
+    /// The FNV-1a hash of everything that was written, for the file identifier.
+    hash: u128,
     inner: T,
 }
 
@@ -53,11 +55,17 @@ impl<T> OffsetTrackingWriter<T> {
         OffsetTrackingWriter {
             inner: writer,
             offset: 0,
+            hash: crate::trailer::FNV_OFFSET_BASIS,
         }
     }
 
     pub fn offset(&self) -> u64 {
         self.offset
+    }
+
+    /// The hash of the bytes that were written so far.
+    pub fn hash(&self) -> u128 {
+        self.hash
     }
 
     #[allow(unused)]
@@ -74,6 +82,7 @@ where
         match self.inner.write(buf) {
             Ok(size) => {
                 self.offset += size as u64;
+                self.hash = crate::trailer::fnv1a_128_extend(self.hash, &buf[..size]);
                 Ok(size)
             }
             Err(err) => Err(err),
@@ -85,9 +94,10 @@ where
     }
 
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Error> {
-        self.inner
-            .write_all(buf)
-            .map(|_| self.offset += buf.len() as u64)
+        self.inner.write_all(buf).map(|_| {
+            self.offset += buf.len() as u64;
+            self.hash = crate::trailer::fnv1a_128_extend(self.hash, buf);
+        })
     }
 }
 

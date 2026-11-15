@@ -82,6 +82,23 @@ fn add_text_page(context: &mut DocumentContext<'_>, text: &str, filter: Option<S
     context.add_page(page).unwrap();
 }
 
+/// The `/ID` entry of the trailer of a file.
+fn file_id(bytes: &[u8]) -> String {
+    let at = rfind(bytes, b"/ID").expect("the trailer has an /ID");
+    String::from_utf8_lossy(&bytes[at..at + 50]).into_owned()
+}
+
+#[test]
+fn the_same_document_is_written_to_the_same_bytes() {
+    for mode in MODES {
+        let write = |text: &str| build(mode, |context| add_text_page(context, text, Some(StreamFilter::Deflate)));
+        let (first, second) = (write("same"), write("same"));
+        assert_eq!(first, second, "mode object_streams={mode}");
+        // a different document gets a different identifier
+        assert_ne!(file_id(&first), file_id(&write("other")), "mode object_streams={mode}");
+    }
+}
+
 fn name(object: &Object) -> &str {
     std::str::from_utf8(object.as_name().unwrap()).unwrap()
 }
