@@ -13,8 +13,6 @@
 //    limitations under the License.
 
 use std::io::{Result, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate as lemon_pdf;
 use crate::document::{DocumentCatalog, DocumentContext, DocumentInfo};
@@ -31,32 +29,31 @@ impl PdfFormat for HexString {
     }
 }
 
-/// The 128-bit FNV-1a hash (http://www.isthe.com/chongo/tech/comp/fnv/).
+/// The start value of the 128-bit FNV-1a hash (http://www.isthe.com/chongo/tech/comp/fnv/).
+pub(crate) const FNV_OFFSET_BASIS: u128 = 0x6c62272e_07bb0142_62b82175_6295c58d;
+
+/// Continues the 128-bit FNV-1a hash `hash` with `bytes`.
 ///
 /// Not a cryptographic hash: it is only used to make file identifiers unlikely to collide.
-fn fnv1a_128(bytes: &[u8]) -> u128 {
-    const OFFSET_BASIS: u128 = 0x6c62272e_07bb0142_62b82175_6295c58d;
+pub(crate) fn fnv1a_128_extend(hash: u128, bytes: &[u8]) -> u128 {
     const PRIME: u128 = 0x00000000_01000000_00000000_0000013b;
-    bytes.iter().fold(OFFSET_BASIS, |hash, &byte| {
-        (hash ^ u128::from(byte)).wrapping_mul(PRIME)
-    })
+    bytes
+        .iter()
+        .fold(hash, |hash, &byte| (hash ^ u128::from(byte)).wrapping_mul(PRIME))
 }
 
-/// A file identifier (the `/ID` entry of the trailer, ISO 32000-1, 14.4) that is unlikely to be
-/// the same for two different files: a hash of the current time, the file length, the process
-/// and a counter of the documents written by this process.
-fn get_digest(file_len: u64) -> HexString {
-    static DOCUMENTS: AtomicU64 = AtomicU64::new(0);
+/// The 128-bit FNV-1a hash of `bytes`.
+#[cfg(test)]
+fn fnv1a_128(bytes: &[u8]) -> u128 {
+    fnv1a_128_extend(FNV_OFFSET_BASIS, bytes)
+}
 
-    let time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    let mut input = Vec::with_capacity(36);
-    input.extend_from_slice(&time.to_le_bytes());
-    input.extend_from_slice(&file_len.to_le_bytes());
-    input.extend_from_slice(&std::process::id().to_le_bytes());
-    input.extend_from_slice(&DOCUMENTS.fetch_add(1, Ordering::Relaxed).to_le_bytes());
-    HexString(format!("{:032x}", fnv1a_128(&input)))
+/// A file identifier (the `/ID` entry of the trailer, ISO 32000-1, 14.4): the hash of the bytes
+/// of the file in front of the trailer. The same document is written to the same bytes, and two
+/// different documents have different identifiers unless the hash collides. (It used to be a
+/// hash of the time and the process, which made every file different.)
+fn file_id(hash: u128) -> HexString {
+    HexString(format!("{:032x}", hash))
 }
 
 /// The trailer dictionary (ISO 32000-1, 7.5.5).
@@ -89,8 +86,8 @@ pub struct Trailer {
 }
 
 impl Trailer {
-    fn dictionary(&self, size: usize, file_len: u64) -> TrailerDictionary {
-        let digest = get_digest(file_len);
+    fn dictionary(&self, size: usize, hash: u128) -> TrailerDictionary {
+        let digest = file_id(hash);
         TrailerDictionary {
             size,
             root: self.document_catalog,
@@ -102,11 +99,12 @@ impl Trailer {
     /// Writes the cross-reference information as a cross-reference stream (PDF 1.5).
     pub(crate) fn write_xref_stream(&mut self, context: &mut DocumentContext) -> Result<()> {
         let offset = context.current_offset();
+        let hash = context.output.hash();
         // the xref stream is an object itself
         let num = context.crossref.add_entry(offset, 0);
         let (data, width) = context.crossref.stream_data();
         let dict = XRefStreamDict {
-            trailer: self.dictionary(num as usize + 1, offset),
+            trailer: self.dictionary(num as usize + 1, hash),
             w: [1, width, 2],
         };
         let stream = Stream::deflated(dict, &data)?;
@@ -123,7 +121,7 @@ impl Trailer {
     pub(crate) fn write(&mut self, context: &mut DocumentContext) -> Result<()> {
         writeln!(context.output, "trailer")?;
         let size = context.crossref.len() as usize + 1;
-        let dictionary = self.dictionary(size, context.current_offset());
+        let dictionary = self.dictionary(size, context.output.hash());
         dictionary.write(&mut Formatter {
             writer: &mut context.output,
         })?;
@@ -145,16 +143,16 @@ mod tests {
     }
 
     #[test]
-    fn digest_is_32_hex_digits() {
-        let HexString(digest) = get_digest(1234);
-        assert_eq!(digest.len(), 32);
-        assert!(digest.bytes().all(|b| b.is_ascii_hexdigit()), "{}", digest);
+    fn file_id_is_32_hex_digits() {
+        let HexString(id) = file_id(fnv1a_128(b"abc"));
+        assert_eq!(id.len(), 32);
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit()), "{}", id);
     }
 
     #[test]
-    fn digests_differ_for_documents_written_at_once() {
-        // same file length and (possibly) the same timestamp: the counter must tell them apart
-        let digests: std::collections::HashSet<_> = (0..100).map(|_| get_digest(1000).0).collect();
-        assert_eq!(digests.len(), 100);
+    fn extending_the_hash_is_hashing_the_concatenation() {
+        let (a, b) = (b"%PDF-1.7\n1 0 obj", b" << >> endobj");
+        let whole: Vec<u8> = a.iter().chain(b).copied().collect();
+        assert_eq!(fnv1a_128_extend(fnv1a_128_extend(FNV_OFFSET_BASIS, a), b), fnv1a_128(&whole));
     }
 }
