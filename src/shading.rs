@@ -34,7 +34,7 @@ use crate as lemon_pdf;
 use crate::content::{Matrix, Pt};
 use crate::image::ColorSpace;
 use crate::mesh::MeshShading;
-use crate::object::IndirectReference;
+use crate::object::{IndirectReference, Precise};
 
 /// An error from building a function or a gradient.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +52,11 @@ impl fmt::Display for ShadingError {
 }
 
 impl std::error::Error for ShadingError {}
+
+/// The components of a colour, written with the precision that a colour needs.
+fn precise(components: Vec<f64>) -> Vec<Precise> {
+    components.into_iter().map(Precise).collect()
+}
 
 /// A color in one of the device color spaces. Every component is from 0 to 1.
 pub trait Color: Copy {
@@ -113,9 +118,9 @@ pub enum Function {
 pub struct ExponentialFunction {
     domain: [f64; 2],
     #[rename("C0")]
-    c0: Vec<f64>,
+    c0: Vec<Precise>,
     #[rename("C1")]
-    c1: Vec<f64>,
+    c1: Vec<Precise>,
     #[rename("N")]
     exponent: f64,
 }
@@ -125,8 +130,8 @@ impl ExponentialFunction {
     pub fn linear<C: Color>(from: C, to: C) -> Self {
         ExponentialFunction {
             domain: [0.0, 1.0],
-            c0: from.components(),
-            c1: to.components(),
+            c0: precise(from.components()),
+            c1: precise(to.components()),
             exponent: 1.0,
         }
     }
@@ -288,7 +293,7 @@ pub enum Shading {
 #[constant(ShadingType = 2)]
 pub struct AxialShading {
     color_space: ColorSpace,
-    background: Option<Vec<f64>>,
+    background: Option<Vec<Precise>>,
     #[rename("BBox")]
     bbox: Option<[Pt; 4]>,
     coords: [Pt; 4],
@@ -303,7 +308,7 @@ impl AxialShading {
     pub fn new<C: Color>(from: Point, to: Point, gradient: &Gradient<C>) -> Self {
         AxialShading {
             color_space: C::SPACE,
-            background: gradient.background.map(|color| color.components()),
+            background: gradient.background.map(|color| precise(color.components())),
             bbox: None,
             coords: [from.x, from.y, to.x, to.y],
             function: gradient.function.clone(),
@@ -324,7 +329,7 @@ impl AxialShading {
 #[constant(ShadingType = 3)]
 pub struct RadialShading {
     color_space: ColorSpace,
-    background: Option<Vec<f64>>,
+    background: Option<Vec<Precise>>,
     #[rename("BBox")]
     bbox: Option<[Pt; 4]>,
     coords: [Pt; 6],
@@ -338,7 +343,7 @@ impl RadialShading {
     pub fn new<C: Color>(start: Circle, end: Circle, gradient: &Gradient<C>) -> Self {
         RadialShading {
             color_space: C::SPACE,
-            background: gradient.background.map(|color| color.components()),
+            background: gradient.background.map(|color| precise(color.components())),
             bbox: None,
             coords: [start.x, start.y, start.radius, end.x, end.y, end.radius],
             function: gradient.function.clone(),

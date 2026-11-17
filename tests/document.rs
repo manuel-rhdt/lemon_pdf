@@ -1503,3 +1503,38 @@ fn an_icc_profile_is_written_once_for_all_pages() {
         assert_eq!(bytes.windows(4).filter(|window| *window == b"acsp").count(), 1, "mode object_streams={mode}");
     }
 }
+
+#[test]
+fn colors_are_written_with_more_than_two_decimals() {
+    use lemon_pdf::color_space::CalRgbColorSpace;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                // 187 / 255 would be 0.73 with two decimals, which is a different byte
+                page.device_rgb_fill_color(187.0 / 255.0, 0.2, 1.0)?;
+                page.device_gray_stroke_color(1.0 / 3.0)?;
+                let space = page.add_color_space(CalRgbColorSpace {
+                    white_point: [0.950_455_927, 1.0, 1.089_057_751],
+                    gamma: [1.0; 3],
+                    matrix: [0.486_570_949, 0.228_974_564, 0.0, 0.265_667_693, 0.691_738_522, 0.045_113_382, 0.198_217_285, 0.079_286_914, 1.043_944_369],
+                });
+                page.set_fill_color_components(&space, &[0.123_456_789, 0.5, 0.000_001_4])
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(content.contains("0.733333 0.2 1 rg"), "{content}");
+        assert!(content.contains("0.333333 G"), "{content}");
+        assert!(content.contains("0.123457 0.5 0 sc"), "{content}");
+        let (resources, _) = document.get_page_resources(page).unwrap();
+        let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
+        let cal = spaces.get(b"CS0").unwrap().as_array().unwrap()[1].as_dict().unwrap();
+        let matrix: Vec<f64> = cal.get(b"Matrix").unwrap().as_array().unwrap().iter().map(|v| v.as_float().unwrap() as f64).collect();
+        assert!((matrix[0] - 0.486_571).abs() < 1e-6 && (matrix[7] - 0.079_287).abs() < 1e-6, "{matrix:?}");
+    }
+}

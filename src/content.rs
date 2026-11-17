@@ -22,6 +22,7 @@ use crate::color_space::{ColorSpaceResource, LabColorSpace};
 use crate::font::Font;
 use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
 use crate::image::XObject;
+use crate::object::Precise;
 use crate::object::{
     write_literal_string, Formatter, IndirectReference, Name, PdfFormat, WriteEscaped,
 };
@@ -141,7 +142,7 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     pub fn set_fill_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
         self.write_operation1(space, "cs")?;
         for component in components {
-            self.push_operand(*component)?;
+            self.push_operand(Precise(*component))?;
         }
         self.apply_operator("sc")
     }
@@ -150,7 +151,7 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     pub fn set_stroke_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
         self.write_operation1(space, "CS")?;
         for component in components {
-            self.push_operand(*component)?;
+            self.push_operand(Precise(*component))?;
         }
         self.apply_operator("SC")
     }
@@ -159,14 +160,14 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     /// operators).
     pub fn lab_fill_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
         self.write_operation1(space, "cs")?;
-        self.write_operation3(l, a, b, "sc")
+        self.write_operation3(Precise(l), Precise(a), Precise(b), "sc")
     }
 
     /// Makes strokes use a colour of a Lab space from `add_lab_color_space` (`CS` and `SC`
     /// operators).
     pub fn lab_stroke_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
         self.write_operation1(space, "CS")?;
-        self.write_operation3(l, a, b, "SC")
+        self.write_operation3(Precise(l), Precise(a), Precise(b), "SC")
     }
 
     /// Applies a graphics state parameter dictionary from `add_ext_gstate` (`gs` operator).
@@ -374,28 +375,29 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.write_operation2(dashes, phase, "d")
     }
 
+    // (the components of a colour have six decimals: two would be steps of more than 8 bits)
     pub fn device_gray_fill_color(&mut self, gray: f64) -> Result<()> {
-        self.write_operation1(gray, "g")
+        self.write_operation1(Precise(gray), "g")
     }
 
     pub fn device_gray_stroke_color(&mut self, gray: f64) -> Result<()> {
-        self.write_operation1(gray, "G")
+        self.write_operation1(Precise(gray), "G")
     }
 
     pub fn device_rgb_fill_color(&mut self, red: f64, green: f64, blue: f64) -> Result<()> {
-        self.write_operation3(red, green, blue, "rg")
+        self.write_operation3(Precise(red), Precise(green), Precise(blue), "rg")
     }
 
     pub fn device_rgb_stroke_color(&mut self, red: f64, green: f64, blue: f64) -> Result<()> {
-        self.write_operation3(red, green, blue, "RG")
+        self.write_operation3(Precise(red), Precise(green), Precise(blue), "RG")
     }
 
     pub fn device_cmyk_fill_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
-        self.write_operation4(c, m, y, k, "k")
+        self.write_operation4(Precise(c), Precise(m), Precise(y), Precise(k), "k")
     }
 
     pub fn device_cmyk_stroke_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
-        self.write_operation4(c, m, y, k, "K")
+        self.write_operation4(Precise(c), Precise(m), Precise(y), Precise(k), "K")
     }
 
     pub fn move_to(&mut self, x: Pt, y: Pt) -> Result<()> {

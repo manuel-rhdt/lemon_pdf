@@ -6,7 +6,11 @@ use std::io::Result;
 use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat as DerivePdfFormat;
 
-use crate::object::{Formatter, IndirectReference, Name, PdfFormat};
+use crate::object::{Formatter, IndirectReference, Name, PdfFormat, Precise};
+
+fn precise(values: &[f64]) -> Vec<Precise> {
+    values.iter().map(|value| Precise(*value)).collect()
+}
 use crate::output_intent::IccProfileDict;
 use crate::stream::Stream;
 
@@ -44,8 +48,8 @@ impl PdfFormat for LabColorSpace {
         impl PdfFormat for Parameters<'_> {
             fn write(&self, f: &mut Formatter) -> Result<()> {
                 f.format_dictionary()
-                    .key_value("WhitePoint", &self.0.white_point.to_vec())
-                    .key_value("Range", &self.0.range.to_vec())
+                    .key_value("WhitePoint", &precise(&self.0.white_point))
+                    .key_value("Range", &precise(&self.0.range))
                     .finish()
             }
         }
@@ -79,9 +83,9 @@ impl PdfFormat for CalRgbColorSpace {
         impl PdfFormat for Parameters<'_> {
             fn write(&self, f: &mut Formatter) -> Result<()> {
                 f.format_dictionary()
-                    .key_value("WhitePoint", &self.0.white_point.to_vec())
-                    .key_value("Gamma", &self.0.gamma.to_vec())
-                    .key_value("Matrix", &self.0.matrix.to_vec())
+                    .key_value("WhitePoint", &precise(&self.0.white_point))
+                    .key_value("Gamma", &precise(&self.0.gamma))
+                    .key_value("Matrix", &precise(&self.0.matrix))
                     .finish()
             }
         }

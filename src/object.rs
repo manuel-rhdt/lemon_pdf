@@ -429,8 +429,13 @@ impl std::fmt::Write for StackString {
 /// `value` with two decimals and without trailing zeros, in `buffer` (`20.00` becomes `20`,
 /// `-41.50` becomes `-41.5`). The largest value, `MAX_REAL`, has 39 digits before the point.
 fn trimmed_real<'a>(buffer: &'a mut StackString, value: f64) -> &'a str {
+    trimmed_real_with(buffer, value, 2)
+}
+
+/// Like `trimmed_real` with `decimals` decimals.
+fn trimmed_real_with<'a>(buffer: &'a mut StackString, value: f64, decimals: usize) -> &'a str {
     use std::fmt::Write as _;
-    write!(buffer, "{:.2}", sanitize_real(value)).expect("a real number has fewer than 64 characters");
+    write!(buffer, "{:.*}", decimals, sanitize_real(value)).expect("a real number has fewer than 64 characters");
     let trimmed = buffer.as_str().trim_end_matches('0').trim_end_matches('.');
     match trimmed {
         "" | "-" | "-0" => "0",
@@ -444,6 +449,19 @@ fn trimmed_real<'a>(buffer: &'a mut StackString, value: f64) -> &'a str {
 fn write_trimmed_real(output: &mut Formatter, value: f64) -> Result<()> {
     let mut buffer = StackString::new();
     output.write_all(trimmed_real(&mut buffer, value).as_bytes())
+}
+
+/// A real number that is written with up to six decimals, where the two decimals of an `f64` are
+/// too few: the components of a colour (a step of 0.01 is more than a step of 8 bits), and the
+/// numbers that say a colour space (the matrix of `CalRGB`).
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct Precise(pub f64);
+
+impl PdfFormat for Precise {
+    fn write(&self, output: &mut Formatter) -> Result<()> {
+        let mut buffer = StackString::new();
+        output.write_all(trimmed_real_with(&mut buffer, self.0, 6).as_bytes())
+    }
 }
 
 impl PdfFormat for f32 {
