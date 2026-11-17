@@ -21,6 +21,7 @@ use crate as lemon_pdf;
 
 use crate::crossref::CrossRef;
 use crate::object::{Formatter, IndirectObject, IndirectReference, RawIndirectReference, TextString};
+use crate::names::{DestinationTree, Names};
 use crate::outline::{OutlineEntry, OutlineItem, Outlines};
 use crate::pagetree::{Page, Pages};
 use crate::stream::Stream;
@@ -113,6 +114,7 @@ pub(crate) struct DocumentCatalog {
     metadata: Option<IndirectReference<Stream<MetadataDict>>>,
     outlines: Option<IndirectReference<Outlines>>,
     page_mode: Option<PageMode>,
+    names: Option<Names>,
 }
 
 /// How a viewer shows the document when it is opened (`/PageMode` of the catalog, ISO 32000-1,
@@ -224,6 +226,7 @@ impl<'a> DocumentContext<'a> {
             metadata: None,
             outlines: None,
             page_mode: None,
+            names: None,
         });
         context.start_pdf()?;
         Ok(context)
@@ -443,6 +446,25 @@ impl<'a> DocumentContext<'a> {
             self.write_reserved_object(references[index], entry)?;
         }
         Ok((references.first().copied(), references.last().copied(), visible))
+    }
+
+    /// Sets the named destinations of the document (`/Names /Dests` of the catalog): a viewer
+    /// that opens `document.pdf#name` jumps to the destination called `name`. The names are byte
+    /// strings; if one is given more than once, the last destination counts. The pages that the
+    /// destinations refer to may not be written yet.
+    pub fn set_named_destinations(
+        &mut self,
+        destinations: impl IntoIterator<Item = (Vec<u8>, crate::annotation::Destination)>,
+    ) {
+        let names: std::collections::BTreeMap<_, _> = destinations.into_iter().collect();
+        if names.is_empty() {
+            return;
+        }
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.names = Some(Names {
+                dests: Some(DestinationTree { names }),
+            });
+        }
     }
 
     /// Sets how viewers show the document when it is opened (`/PageMode`), for example with the

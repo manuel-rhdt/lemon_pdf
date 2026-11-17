@@ -1230,3 +1230,32 @@ fn page_mode_is_written_to_the_catalog() {
         assert_eq!(document.catalog().unwrap().get(b"PageMode").unwrap().as_name().unwrap(), b"UseOC");
     }
 }
+
+#[test]
+fn named_destinations_are_a_sorted_name_tree() {
+    use lemon_pdf::annotation::Destination;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let page = context.create_reference();
+            let at = |y: f64| Destination { page, point: (Pt(0.0), Pt(y)) };
+            // given out of order, and `b` twice: the last one counts
+            context.set_named_destinations(vec![
+                (b"b".to_vec(), at(1.0)),
+                (b"a".to_vec(), at(2.0)),
+                (b"b".to_vec(), at(3.0)),
+            ]);
+            context.add_reserved_page(page, Page::new()).unwrap();
+        });
+        let names = document.catalog().unwrap().get(b"Names").unwrap();
+        let names = document.dereference(names).unwrap().1.as_dict().unwrap();
+        let dests = document.dereference(names.get(b"Dests").unwrap()).unwrap().1.as_dict().unwrap();
+        let entries = dests.get(b"Names").unwrap().as_array().unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].as_str().unwrap(), b"a");
+        assert_eq!(entries[2].as_str().unwrap(), b"b");
+        let destination = entries[3].as_array().unwrap();
+        assert_eq!(destination[1].as_name().unwrap(), b"XYZ");
+        assert_eq!(destination[3].as_float().unwrap(), 3.0);
+    }
+}
