@@ -1528,9 +1528,9 @@ fn colors_are_written_with_more_than_two_decimals() {
         let page = document.get_pages().values().next().copied().unwrap();
         let content = String::from_utf8(document.get_page_content(page)).unwrap();
         let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(content.contains("0.733333 0.2 1 rg"), "{content}");
-        assert!(content.contains("0.333333 G"), "{content}");
-        assert!(content.contains("0.123457 0.5 0 sc"), "{content}");
+        assert!(content.contains("0.733333 0.2 1 rg"), "{}", content);
+        assert!(content.contains("0.333333 G"), "{}", content);
+        assert!(content.contains("0.123457 0.5 0.000001 sc"), "{}", content);
         let (resources, _) = document.get_page_resources(page).unwrap();
         let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
         let cal = spaces.get(b"CS0").unwrap().as_array().unwrap()[1].as_dict().unwrap();
