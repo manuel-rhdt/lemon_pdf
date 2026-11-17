@@ -139,6 +139,21 @@ fn clamp_alpha(alpha: f64) -> f64 {
     }
 }
 
+/// How a reader maps the colours of the document to the ones of the device when the device cannot
+/// show some of them (`ri` operator, ISO 32000-1, 8.6.5.8). The initial intent is
+/// `RelativeColorimetric`; a reader may ignore the setting.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PdfFormat)]
+pub enum RenderingIntent {
+    /// The colours that the device can show are exact, and the other ones are clipped to its gamut.
+    AbsoluteColorimetric,
+    /// Like `AbsoluteColorimetric`, relative to the white of the device.
+    RelativeColorimetric,
+    /// The colours are as saturated as the device can show them.
+    Saturation,
+    /// The gamut is compressed, so that the relations between all colours stay as they are.
+    Perceptual,
+}
+
 /// The blend modes of ISO 32000-1, 11.3.5.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PdfFormat)]
 pub enum BlendMode {

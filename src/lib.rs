@@ -18,6 +18,7 @@ extern crate derive_more;
 
 pub mod annotation;
 pub mod array;
+pub mod color_space;
 pub mod content;
 mod crossref;
 pub mod dictionary;

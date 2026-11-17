@@ -28,6 +28,7 @@ use std::fmt;
 use std::io::{Read, Result, Write};
 
 use crate as lemon_pdf;
+use crate::color_space::IccBasedColorSpace;
 use crate::object::{Formatter, IndirectReference, Name, PdfFormat};
 use crate::stream::{Filter, Stream};
 use crate::DocumentContext;
@@ -124,6 +125,9 @@ pub struct Image {
     /// Pixels whose samples are all inside of these (inclusive) ranges are transparent, two
     /// numbers per component.
     color_key: Option<Vec<u32>>,
+    /// The ICC profile of the colour components (or of the palette entries): the colours are
+    /// those of this profile and not of the device space.
+    icc: Option<IccBasedColorSpace>,
     /// Asks the reader to smooth the image when it is scaled up.
     pub interpolate: bool,
 }
@@ -189,6 +193,7 @@ impl Image {
             inverted: false,
             palette: None,
             color_key: None,
+            icc: None,
             interpolate: false,
         })
     }
@@ -282,6 +287,7 @@ impl Image {
             inverted: info.components == 4 && info.adobe,
             palette: None,
             color_key: None,
+            icc: None,
             interpolate: false,
         })
     }
@@ -295,7 +301,7 @@ impl Image {
     /// they have to be decoded and passed with `Image::from_rgba8` and the like.
     ///
     /// The pixel data is inflated once to check its length (without keeping it); the
-    /// checksums of the chunks are not verified. Gamma and color profiles are ignored.
+    /// checksums of the chunks are not verified. Gamma and color profiles are ignored here: `with_icc_profile` gives the image one.
     pub fn from_png(png: &[u8]) -> std::result::Result<Self, ImageError> {
         let info = parse_png(png)?;
         Ok(Image {
@@ -308,6 +314,7 @@ impl Image {
             inverted: false,
             palette: info.palette,
             color_key: info.color_key,
+            icc: None,
             interpolate: false,
         })
     }
@@ -318,6 +325,15 @@ impl Image {
         check_length(self.width as usize * self.height as usize, alpha.len())?;
         self.alpha = Some(alpha);
         Ok(self)
+    }
+
+    /// Gives the image an ICC profile (from `DocumentContext::write_icc_profile` or
+    /// `icc_color_space`): its colours are those of the profile, which must have as many
+    /// components as the image has (the components of the colour space, or three for a
+    /// palette). Without a profile the colours are those of the device space.
+    pub fn with_icc_profile(mut self, profile: IccBasedColorSpace) -> Self {
+        self.icc = Some(profile);
+        self
     }
 
     pub fn width(&self) -> u32 {
@@ -352,8 +368,12 @@ pub enum XObject {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ImageColorSpace {
     Device(ColorSpace),
+    /// `[/ICCBased stream]`.
+    Icc(IccBasedColorSpace),
     /// `[/Indexed /DeviceRGB hival lookup]`; the lookup table has three bytes per entry.
     Indexed(Vec<u8>),
+    /// `[/Indexed [/ICCBased stream] hival lookup]`: the entries are colours of the profile.
+    IndexedIcc(IccBasedColorSpace, Vec<u8>),
 }
 
 struct HexString<'a>(&'a [u8]);
@@ -378,6 +398,14 @@ impl PdfFormat for ImageColorSpace {
     fn write(&self, output: &mut Formatter) -> Result<()> {
         match self {
             ImageColorSpace::Device(space) => space.write(output),
+            ImageColorSpace::Icc(space) => space.write(output),
+            ImageColorSpace::IndexedIcc(base, palette) => output
+                .format_array()
+                .value(&Name::from("Indexed"))
+                .value(base)
+                .value(&(palette.len() / 3 - 1))
+                .value(&HexString(palette))
+                .finish(),
             ImageColorSpace::Indexed(palette) => output
                 .format_array()
                 .value(&Name::from("Indexed"))
@@ -485,9 +513,11 @@ impl<'a> DocumentContext<'a> {
         } else {
             None
         };
-        let color_space = match &image.palette {
-            Some(palette) => ImageColorSpace::Indexed(palette.clone()),
-            None => ImageColorSpace::Device(image.color_space),
+        let color_space = match (&image.palette, image.icc) {
+            (Some(palette), Some(icc)) => ImageColorSpace::IndexedIcc(icc, palette.clone()),
+            (Some(palette), None) => ImageColorSpace::Indexed(palette.clone()),
+            (None, Some(icc)) => ImageColorSpace::Icc(icc),
+            (None, None) => ImageColorSpace::Device(image.color_space),
         };
         let decode_parms = match image.data {
             ImageData::Png(_) => Some(PngPredictor {

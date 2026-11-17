@@ -178,6 +178,8 @@ pub struct DocumentContext<'a> {
     /// entries will be created.
     pub document_info: DocumentInfo,
     dangling_references: HashSet<RawIndirectReference>,
+    /// The ICC profiles that were written, by the key that `icc_color_space` was given.
+    icc_profiles: std::collections::HashMap<String, IndirectReference<Stream<IccProfileDict>>>,
     /// Store small non-stream objects in compressed object streams and write a
     /// cross-reference stream instead of a cross-reference table. Enabled by default.
     pub object_streams: bool,
@@ -212,6 +214,7 @@ impl<'a> DocumentContext<'a> {
             page_tree: Pages::new(),
             document_info: Default::default(),
             dangling_references: Default::default(),
+            icc_profiles: Default::default(),
             object_streams: true,
             pending_objects: Vec::new(),
             pending_bytes: 0,
@@ -468,6 +471,41 @@ impl<'a> DocumentContext<'a> {
         }
     }
 
+    /// Writes an ICC profile as a stream and returns the reference, to make a colour space of it
+    /// (`IccBasedColorSpace`) or an output intent. `components` is the number of colour
+    /// components of the profile (3 for RGB), `filter` compresses it.
+    pub fn write_icc_profile(
+        &mut self,
+        profile: Vec<u8>,
+        components: i64,
+        filter: Option<crate::stream::StreamFilter>,
+    ) -> Result<IndirectReference<Stream<IccProfileDict>>, Error> {
+        let dict = IccProfileDict { n: components };
+        let stream = match filter {
+            Some(_) => Stream::deflated(dict, &profile)?,
+            None => Stream::new(dict, profile),
+        };
+        self.write_object(stream)
+    }
+
+    /// The colour space of an ICC profile that the document writes once, whatever the number of
+    /// pages that use it: the first call with a `key` writes the profile that `profile` makes, the
+    /// next ones give the same space. `components` and `filter` are as for `write_icc_profile`.
+    pub fn icc_color_space(
+        &mut self,
+        key: &str,
+        profile: impl FnOnce() -> Vec<u8>,
+        components: i64,
+        filter: Option<crate::stream::StreamFilter>,
+    ) -> Result<crate::color_space::IccBasedColorSpace, Error> {
+        if let Some(reference) = self.icc_profiles.get(key) {
+            return Ok(crate::color_space::IccBasedColorSpace(*reference));
+        }
+        let reference = self.write_icc_profile(profile(), components, filter)?;
+        self.icc_profiles.insert(key.to_owned(), reference);
+        Ok(crate::color_space::IccBasedColorSpace(reference))
+    }
+
     /// Adds an output intent (`/OutputIntents` of the catalog) with an embedded ICC profile.
     /// `filter` compresses the profile.
     pub fn add_output_intent(
@@ -475,12 +513,7 @@ impl<'a> DocumentContext<'a> {
         intent: OutputIntentDesc,
         filter: Option<crate::stream::StreamFilter>,
     ) -> Result<(), Error> {
-        let dict = IccProfileDict { n: intent.components };
-        let profile = match filter {
-            Some(_) => Stream::deflated(dict, &intent.profile)?,
-            None => Stream::new(dict, intent.profile),
-        };
-        let profile = self.write_object(profile)?;
+        let profile = self.write_icc_profile(intent.profile, intent.components, filter)?;
         let output_intent = self.write_object(OutputIntent {
             subtype: intent.subtype,
             output_condition_identifier: TextString(intent.output_condition_identifier),

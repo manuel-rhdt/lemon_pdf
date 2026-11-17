@@ -1386,3 +1386,253 @@ fn link_annotations_are_printed() {
         assert_eq!(annotations[0].get(b"F").unwrap().as_i64().unwrap(), 4);
     }
 }
+
+#[test]
+fn lab_colors_use_a_named_color_space() {
+    use lemon_pdf::color_space::LabColorSpace;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                let key = page.add_lab_color_space(LabColorSpace::d50());
+                // the same space again has the same name
+                assert_eq!(page.add_lab_color_space(LabColorSpace::d50()), key);
+                page.lab_fill_color(&key, 54.0, 106.5, 40.0)?;
+                page.lab_stroke_color(&key, 10.0, -20.0, 30.0)?;
+                Ok(())
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        let content: Vec<&str> = content.split_whitespace().collect();
+        let operations = content.join(" ");
+        assert!(operations.contains("/CS0 cs 54 106.5 40 sc"), "{operations}");
+        assert!(operations.contains("/CS0 CS 10 -20 30 SC"), "{operations}");
+        let (resources, _) = document.get_page_resources(page).unwrap();
+        let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
+        let space = spaces.get(b"CS0").unwrap().as_array().unwrap();
+        assert_eq!(space[0].as_name().unwrap(), b"Lab");
+        let parameters = space[1].as_dict().unwrap();
+        assert_eq!(parameters.get(b"WhitePoint").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(parameters.get(b"Range").unwrap().as_array().unwrap().len(), 4);
+    }
+}
+
+#[test]
+fn color_spaces_of_every_kind_are_resources() {
+    use lemon_pdf::color_space::{CalRgbColorSpace, IccBasedColorSpace, LabColorSpace};
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let profile = context.write_icc_profile(lemon_pdf::icc::display_p3_profile(), 3, Some(StreamFilter::Deflate)).unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                let lab = page.add_color_space(LabColorSpace::d50());
+                let cal = page.add_color_space(CalRgbColorSpace {
+                    white_point: [0.9505, 1.0, 1.089],
+                    gamma: [2.2, 2.2, 2.2],
+                    matrix: [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505],
+                });
+                let icc = page.add_color_space(IccBasedColorSpace(profile));
+                assert_eq!([lab.clone(), cal.clone(), icc.clone()].len(), 3);
+                assert_ne!(lab, cal);
+                assert_ne!(cal, icc);
+                page.set_fill_color_components(&icc, &[1.0, 0.25, 0.0])?;
+                page.set_stroke_color_components(&cal, &[0.5, 0.5, 0.5])?;
+                Ok(())
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(content.contains("/CS2 cs 1 0.25 0 sc"), "{content}");
+        assert!(content.contains("/CS1 CS 0.5 0.5 0.5 SC"), "{content}");
+        let (resources, _) = document.get_page_resources(page).unwrap();
+        let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
+        assert_eq!(spaces.get(b"CS0").unwrap().as_array().unwrap()[0].as_name().unwrap(), b"Lab");
+        let cal = spaces.get(b"CS1").unwrap().as_array().unwrap();
+        assert_eq!(cal[0].as_name().unwrap(), b"CalRGB");
+        assert_eq!(cal[1].as_dict().unwrap().get(b"Matrix").unwrap().as_array().unwrap().len(), 9);
+        let icc = spaces.get(b"CS2").unwrap().as_array().unwrap();
+        assert_eq!(icc[0].as_name().unwrap(), b"ICCBased");
+        let stream = document.dereference(&icc[1]).unwrap().1.as_stream().unwrap();
+        assert_eq!(stream.dict.get(b"N").unwrap().as_i64().unwrap(), 3);
+        let data = stream.decompressed_content().unwrap_or_else(|_| stream.content.clone());
+        assert_eq!(data, lemon_pdf::icc::display_p3_profile());
+    }
+}
+
+#[test]
+fn the_rendering_intent_is_an_operator() {
+    use lemon_pdf::graphics_state::RenderingIntent;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |page| page.set_rendering_intent(RenderingIntent::Perceptual)).unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        assert!(content.split_whitespace().collect::<Vec<_>>().join(" ").contains("/Perceptual ri"), "{content}");
+    }
+}
+
+#[test]
+fn an_icc_profile_is_written_once_for_all_pages() {
+    for &mode in &MODES {
+        let (bytes, document) = build_and_load(mode, |context| {
+            for _ in 0..3 {
+                let space = context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
+                let mut page = Page::new();
+                page.add_content(context, None, |page| {
+                    let name = page.add_color_space(space);
+                    page.set_fill_color_components(&name, &[1.0, 0.0, 0.0])
+                })
+                .unwrap();
+                context.add_page(page).unwrap();
+            }
+        });
+        assert_eq!(document.get_pages().len(), 3);
+        // one profile (its ICC signature is in the file once: the stream is not compressed)
+        assert_eq!(bytes.windows(4).filter(|window| *window == b"acsp").count(), 1, "mode object_streams={mode}");
+    }
+}
+
+#[test]
+fn colors_are_written_with_more_than_two_decimals() {
+    use lemon_pdf::color_space::CalRgbColorSpace;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                // 187 / 255 would be 0.73 with two decimals, which is a different byte
+                page.device_rgb_fill_color(187.0 / 255.0, 0.2, 1.0)?;
+                page.device_gray_stroke_color(1.0 / 3.0)?;
+                let space = page.add_color_space(CalRgbColorSpace {
+                    white_point: [0.950_455_927, 1.0, 1.089_057_751],
+                    gamma: [1.0; 3],
+                    matrix: [0.486_570_949, 0.228_974_564, 0.0, 0.265_667_693, 0.691_738_522, 0.045_113_382, 0.198_217_285, 0.079_286_914, 1.043_944_369],
+                });
+                page.set_fill_color_components(&space, &[0.123_456_789, 0.5, 0.000_001_4])
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(content.contains("0.733333 0.2 1 rg"), "{}", content);
+        assert!(content.contains("0.333333 G"), "{}", content);
+        assert!(content.contains("0.123457 0.5 0.000001 sc"), "{}", content);
+        let (resources, _) = document.get_page_resources(page).unwrap();
+        let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
+        let cal = spaces.get(b"CS0").unwrap().as_array().unwrap()[1].as_dict().unwrap();
+        let matrix: Vec<f64> = cal.get(b"Matrix").unwrap().as_array().unwrap().iter().map(|v| v.as_float().unwrap() as f64).collect();
+        assert!((matrix[0] - 0.486_571).abs() < 1e-6 && (matrix[7] - 0.079_287).abs() < 1e-6, "{matrix:?}");
+    }
+}
+
+#[test]
+fn the_defaults_of_the_colour_spaces_are_the_ones_that_were_measured() {
+    use lemon_pdf::color_space::{CalRgbColorSpace, LabColorSpace, D50_WHITE_POINT};
+
+    // Lab: +-128 is right on an iPhone, +-256 shows a* and b* at half
+    assert_eq!(LabColorSpace::d50().range, [-128.0, 128.0, -128.0, 128.0]);
+    // the XYZ carrier: the components (1, 1, 1) are the white point, whatever the white point is
+    for white in [D50_WHITE_POINT, [0.950_456, 1.0, 1.089_058]] {
+        let space = CalRgbColorSpace::xyz_carrier(white);
+        let m = space.matrix;
+        assert_eq!(space.gamma, [1.0; 3]);
+        // the columns of the matrix add up to the white point
+        assert_eq!([m[0] + m[3] + m[6], m[1] + m[4] + m[7], m[2] + m[5] + m[8]], white);
+    }
+    // the gamma 2.4 profile of Rec. 2020 is a profile like the other ones
+    let profile = lemon_pdf::icc::rec2020_gamma24_profile();
+    assert_eq!(&profile[36..40], b"acsp");
+    assert!(profile.len() < 700);
+}
+
+#[test]
+fn a_default_colour_space_is_in_the_resources_of_the_page() {
+    use lemon_pdf::color_space::DefaultColorSpace;
+
+    for &mode in &MODES {
+        let (bytes, document) = build_and_load(mode, |context| {
+            for _ in 0..2 {
+                let srgb = context.icc_color_space("srgb", lemon_pdf::icc::srgb_profile, 3, None).unwrap();
+                let mut page = Page::new();
+                page.add_content(context, None, |page| {
+                    page.set_default_color_space(DefaultColorSpace::Rgb, srgb);
+                    // setting it again replaces it, and the names of other spaces stay distinct
+                    page.set_default_color_space(DefaultColorSpace::Rgb, srgb);
+                    let p3 = page.pdf_context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
+                    let name = page.add_color_space(p3);
+                    page.set_fill_color_components(&name, &[1.0, 0.0, 0.0])?;
+                    // the same space as the default one is still a space of its own, not the default
+                    let same = page.add_color_space(srgb);
+                    assert_ne!(same.as_str(), "DefaultRGB");
+                    page.set_fill_color_components(&same, &[0.2, 0.4, 0.6])?;
+                    page.device_rgb_fill_color(0.2, 0.4, 0.6)
+                })
+                .unwrap();
+                context.add_page(page).unwrap();
+            }
+        });
+        for page in document.get_pages().values() {
+            let (resources, _) = document.get_page_resources(*page).unwrap();
+            let spaces = document.dereference(resources.unwrap().get(b"ColorSpace").unwrap()).unwrap().1.as_dict().unwrap();
+            let default = spaces.get(b"DefaultRGB").expect("DefaultRGB");
+            let array = document.dereference(default).unwrap().1.as_array().unwrap();
+            assert_eq!(array[0].as_name().unwrap(), b"ICCBased");
+            assert_eq!(spaces.len(), 3, "DefaultRGB, the space of the red, and the sRGB one that is an ordinary space");
+        }
+        // the sRGB profile is in the file once
+        assert_eq!(bytes.windows(4).filter(|window| *window == b"acsp").count(), 2, "mode object_streams={mode}");
+    }
+}
+
+#[test]
+fn an_image_can_have_an_icc_profile() {
+    use lemon_pdf::image::Image;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let p3 = context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
+            let image = Image::from_rgb8(1, 1, vec![255, 0, 0]).unwrap().with_icc_profile(p3);
+            let reference = context.write_image(image).unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                let name = page.add_xobject(reference);
+                page.draw_image(&name, Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let image = document.objects.values().find_map(|o| o.as_stream().ok().filter(|s| s.dict.get(b"Subtype").ok().and_then(|n| n.as_name().ok()) == Some(b"Image".as_slice()))).unwrap();
+        let space = image.dict.get(b"ColorSpace").unwrap();
+        let space = document.dereference(space).unwrap().1.as_array().unwrap();
+        assert_eq!(space[0].as_name().unwrap(), b"ICCBased");
+    }
+}
+
+#[test]
+fn the_header_of_an_icc_profile_is_checked() {
+    use lemon_pdf::icc::{inspect_profile, srgb_profile, display_p3_profile};
+
+    assert_eq!(inspect_profile(&srgb_profile()).unwrap().components, 3);
+    assert_eq!(inspect_profile(&display_p3_profile()).unwrap().major_version, 4);
+    assert!(inspect_profile(&[0; 10]).is_err());
+    let mut bad = srgb_profile();
+    bad[37] = b'x';
+    assert!(inspect_profile(&bad).is_err());
+    let mut truncated = srgb_profile();
+    truncated.pop();
+    assert!(inspect_profile(&truncated).is_err());
+}

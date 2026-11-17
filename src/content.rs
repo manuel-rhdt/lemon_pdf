@@ -18,9 +18,11 @@ use std::io::{Result, Write};
 use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 use crate as lemon_pdf;
 
+use crate::color_space::{ColorSpaceResource, LabColorSpace};
 use crate::font::Font;
 use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
 use crate::image::XObject;
+use crate::object::Precise;
 use crate::object::{
     write_literal_string, Formatter, IndirectReference, Name, PdfFormat, WriteEscaped,
 };
@@ -74,6 +76,8 @@ pub struct PageContext<'page, 'context, 'context_borrow> {
     /// Shadings and shading patterns with their resource names, a `Vec` for the same reason.
     pub(crate) shadings: Vec<(Shading, Name)>,
     pub(crate) patterns: Vec<(Pattern, Name)>,
+    /// The named colour spaces.
+    pub(crate) color_spaces: Vec<(ColorSpaceResource, Name)>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -113,6 +117,78 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         let key = Name::from(format!("GS{}", self.ext_g_states.len()));
         self.ext_g_states.push((state, key.clone()));
         key
+    }
+
+    /// Adds a colour space to the resources of the page and returns its resource name. Adding an
+    /// equal space again returns the same name.
+    pub fn add_lab_color_space(&mut self, space: LabColorSpace) -> Name {
+        self.add_color_space(space)
+    }
+
+    /// Adds a colour space (Lab, CalRGB or one from an ICC profile) to the resources of the page
+    /// and returns its resource name. Adding an equal space again returns the same name.
+    pub fn add_color_space(&mut self, space: impl Into<ColorSpaceResource>) -> Name {
+        let space = space.into();
+        if let Some((_, key)) = self.color_spaces.iter().find(|(other, key)| *other == space && !key.as_str().starts_with("Default")) {
+            return key.clone();
+        }
+        let mut number = self.color_spaces.len();
+        let key = loop {
+            let key = Name::from(format!("CS{}", number));
+            if !self.color_spaces.iter().any(|(_, other)| *other == key) {
+                break key;
+            }
+            number += 1;
+        };
+        self.color_spaces.push((space, key.clone()));
+        key
+    }
+
+    /// Defines what the device colours of this page mean (`DefaultRGB` and the like in the
+    /// resources): with an sRGB profile, `DeviceRGB` colours are sRGB in every viewer, images
+    /// and shadings included, instead of whatever the viewer takes the device to be. The space
+    /// must have as many components as the device space (`Rgb`: 3). Setting it again replaces it.
+    pub fn set_default_color_space(
+        &mut self,
+        kind: crate::color_space::DefaultColorSpace,
+        space: crate::color_space::IccBasedColorSpace,
+    ) {
+        let key = Name::from(kind.resource_name().to_owned());
+        self.color_spaces.retain(|(_, name)| *name != key);
+        self.color_spaces.push((space.into(), key));
+    }
+
+    /// Makes fills use a colour of a space from `add_color_space` (`cs` and `sc` operators): the
+    /// `components` are the ones of the space, so three for every space that there is yet.
+    pub fn set_fill_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
+        self.write_operation1(space, "cs")?;
+        for component in components {
+            self.push_operand(Precise(*component))?;
+        }
+        self.apply_operator("sc")
+    }
+
+    /// Makes strokes use a colour of a space from `add_color_space` (`CS` and `SC` operators).
+    pub fn set_stroke_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
+        self.write_operation1(space, "CS")?;
+        for component in components {
+            self.push_operand(Precise(*component))?;
+        }
+        self.apply_operator("SC")
+    }
+
+    /// Makes fills use a colour of a Lab space from `add_lab_color_space` (`cs` and `sc`
+    /// operators).
+    pub fn lab_fill_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
+        self.write_operation1(space, "cs")?;
+        self.write_operation3(Precise(l), Precise(a), Precise(b), "sc")
+    }
+
+    /// Makes strokes use a colour of a Lab space from `add_lab_color_space` (`CS` and `SC`
+    /// operators).
+    pub fn lab_stroke_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
+        self.write_operation1(space, "CS")?;
+        self.write_operation3(Precise(l), Precise(a), Precise(b), "SC")
     }
 
     /// Applies a graphics state parameter dictionary from `add_ext_gstate` (`gs` operator).
@@ -178,6 +254,12 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         let key = Name::from(format!("P{}", self.patterns.len()));
         self.patterns.push((pattern, key.clone()));
         key
+    }
+
+    /// Sets the rendering intent (`ri` operator), which tells a reader how to map the colours that
+    /// the device cannot show.
+    pub fn set_rendering_intent(&mut self, intent: crate::graphics_state::RenderingIntent) -> Result<()> {
+        self.write_operation1(intent, "ri")
     }
 
     /// Makes fills use a pattern from `add_shading_pattern` or `add_tiling_pattern` as their color
@@ -314,28 +396,29 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.write_operation2(dashes, phase, "d")
     }
 
+    // (the components of a colour have six decimals: two would be steps of more than 8 bits)
     pub fn device_gray_fill_color(&mut self, gray: f64) -> Result<()> {
-        self.write_operation1(gray, "g")
+        self.write_operation1(Precise(gray), "g")
     }
 
     pub fn device_gray_stroke_color(&mut self, gray: f64) -> Result<()> {
-        self.write_operation1(gray, "G")
+        self.write_operation1(Precise(gray), "G")
     }
 
     pub fn device_rgb_fill_color(&mut self, red: f64, green: f64, blue: f64) -> Result<()> {
-        self.write_operation3(red, green, blue, "rg")
+        self.write_operation3(Precise(red), Precise(green), Precise(blue), "rg")
     }
 
     pub fn device_rgb_stroke_color(&mut self, red: f64, green: f64, blue: f64) -> Result<()> {
-        self.write_operation3(red, green, blue, "RG")
+        self.write_operation3(Precise(red), Precise(green), Precise(blue), "RG")
     }
 
     pub fn device_cmyk_fill_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
-        self.write_operation4(c, m, y, k, "k")
+        self.write_operation4(Precise(c), Precise(m), Precise(y), Precise(k), "k")
     }
 
     pub fn device_cmyk_stroke_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
-        self.write_operation4(c, m, y, k, "K")
+        self.write_operation4(Precise(c), Precise(m), Precise(y), Precise(k), "K")
     }
 
     pub fn move_to(&mut self, x: Pt, y: Pt) -> Result<()> {
@@ -475,6 +558,11 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
                 .into_iter()
                 .map(|(pattern, key)| (key, pattern))
                 .collect(),
+            color_space: self
+                .color_spaces
+                .into_iter()
+                .map(|(space, key)| (key, space))
+                .collect(),
         };
         (resources, self.content_stream, self.page, self.pdf_context)
     }
@@ -513,6 +601,7 @@ impl<'context> DocumentContext<'context> {
             ext_g_states: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
             content_stream: StreamEncoder::new(stream_filter),
             page: &mut page,
             pdf_context: self,
@@ -549,6 +638,7 @@ impl<'context> DocumentContext<'context> {
             ext_g_states: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
             content_stream: StreamEncoder::new(stream_filter),
             page: &mut page,
             pdf_context: self,

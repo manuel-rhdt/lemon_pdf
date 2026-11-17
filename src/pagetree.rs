@@ -19,6 +19,7 @@ use std::io::Result;
 use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat;
 
+use crate::color_space::ColorSpaceResource;
 use crate::annotation::Annotation;
 use crate::array::Array;
 use crate::content::{ContentStream, PageContext};
@@ -70,6 +71,9 @@ pub struct ResourceDictionary {
     pub shading: BTreeMap<Name, Shading>,
     #[skip_if("BTreeMap::is_empty")]
     pub pattern: BTreeMap<Name, Pattern>,
+    /// The named colour spaces, for the `cs` and `CS` operators.
+    #[skip_if("BTreeMap::is_empty")]
+    pub color_space: BTreeMap<Name, ColorSpaceResource>,
 }
 
 /// A convenience struct to create PDF pages.
@@ -127,6 +131,7 @@ impl Page {
             ext_g_states: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
             page: self,
             content_stream: StreamEncoder::new(stream_filter),
             pdf_context: context,
