@@ -159,6 +159,11 @@ fn check_length(expected: usize, actual: usize) -> std::result::Result<(), Image
 }
 
 impl Image {
+    /// The colour space of the samples (of the entries of the palette for an indexed image).
+    pub fn color_space(&self) -> ColorSpace {
+        self.color_space
+    }
+
     /// Creates an image from uncompressed samples.
     ///
     /// The samples are stored row by row from the top left, the components of a pixel next to
