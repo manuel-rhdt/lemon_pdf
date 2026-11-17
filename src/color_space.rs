@@ -30,18 +30,19 @@ pub struct LabColorSpace {
 }
 
 impl LabColorSpace {
-    /// CIELAB relative to the D50 white, with the range of a* and b* of -128 to 127, the usual one
-    /// of CIELAB in 8 bits.
+    /// CIELAB relative to the D50 white, with the range of a* and b* of -128 to 128.
     ///
-    /// A wider range is a trap on iOS: measured on an iPhone 16 Pro (Preview, Files), a range of
-    /// ±256 shows a* and b* at exactly half (the fit is 0.50, the error 0.16 CIEDE2000 against 3.4
-    /// for the unscaled values), while -128 to 127 is right (0.6). The device seems to scale the
-    /// colours so that the range is ±128. A* and b* outside of -128 to 127 (the greens of Rec. 2020
-    /// reach -160) are not shown by such a space on that device: use another encoding for them.
+    /// The range matters on iOS. Measured on an iPhone 16 Pro (Preview, Files, 6 ranges), the device
+    /// shows a* and b* as the value of the operand times 128 divided by the half width of the range:
+    /// ±100 shows them at 1.28 times (ΔC* +17), ±150 at 0.85 (-10.5), ±200 at 0.64 (-25), and ±256 at
+    /// 0.5 (the colours are pale). With ±128 the colours are right (CIEDE2000 0.3 for the hues, 0.00
+    /// for the greys); -128..127 tints the greys by 1.2. So an operand has to be put in the range
+    /// that the space has, and a* and b* beyond ±128 cannot be shown on that device by Lab at all:
+    /// use another encoding for them (a `CalRGB` carrier, [`CalRgbColorSpace::xyz_carrier`]).
     pub fn d50() -> Self {
         LabColorSpace {
             white_point: D50_WHITE_POINT,
-            range: [-128.0, 127.0, -128.0, 127.0],
+            range: [-128.0, 128.0, -128.0, 128.0],
         }
     }
 }
@@ -91,6 +92,11 @@ impl CalRgbColorSpace {
     /// components`: the fit is 0.7 and 0.5 CIEDE2000, against 6.8 and 6.7 for the PDF specification).
     /// A matrix whose columns add up to the white point, like the one of sRGB, is the same for the
     /// specification and for the device, and is exact there.
+    ///
+    /// With the white point of D50 (`D50_WHITE_POINT`, and the colours adapted to it) the carrier is
+    /// exact on the device (CIEDE2000 0.00 for greys and hues). With the white point of D65 the greys
+    /// are exact and the hues lose about 1.3 of chroma (0.9): the device seems to adapt the colorants
+    /// of a D65 space with another transform than Bradford, which a D50 space does not need.
     pub fn xyz_carrier(white_point: [f64; 3]) -> Self {
         CalRgbColorSpace {
             white_point,

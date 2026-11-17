@@ -1543,8 +1543,8 @@ fn colors_are_written_with_more_than_two_decimals() {
 fn the_defaults_of_the_colour_spaces_are_the_ones_that_were_measured() {
     use lemon_pdf::color_space::{CalRgbColorSpace, LabColorSpace, D50_WHITE_POINT};
 
-    // Lab: -128 to 127 is right on an iPhone, +-256 shows a* and b* at half
-    assert_eq!(LabColorSpace::d50().range, [-128.0, 127.0, -128.0, 127.0]);
+    // Lab: +-128 is right on an iPhone, +-256 shows a* and b* at half
+    assert_eq!(LabColorSpace::d50().range, [-128.0, 128.0, -128.0, 128.0]);
     // the XYZ carrier: the components (1, 1, 1) are the white point, whatever the white point is
     for white in [D50_WHITE_POINT, [0.950_456, 1.0, 1.089_058]] {
         let space = CalRgbColorSpace::xyz_carrier(white);

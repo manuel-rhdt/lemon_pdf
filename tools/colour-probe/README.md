@@ -110,7 +110,29 @@ What changed in `lemon_pdf` because of it: `LabColorSpace::d50()` has the range 
 `CalRgbColorSpace::xyz_carrier` makes the carrier whose components (1, 1, 1) are the white point, and
 `icc::rec2020_gamma24_profile` is the Rec. 2020 profile that the device shows as it says.
 
-## Round 2
+## Round 2: iPhone 16 Pro, Preview and Files
+
+Mean CIEDE2000 of the hues (the greys in brackets) against the DeviceRGB patch of the pair:
+
+| encoding | verdict | CIEDE2000 |
+| --- | --- | --- |
+| CalRGB, matrix = diag(white), D50 white, gamma 1 | **works** | 0.00 (0.00) |
+| CalRGB, matrix = diag(white), D65 white, gamma 1 and 2.2 | works | 0.91 (0.00): the hues lose 1.3 of chroma |
+| Lab D50, range -128..128 | **works** | 0.31 (0.00) |
+| Lab D50, range -127..127 | works | 0.27 (0.00) |
+| Lab D50, range -128..127 | works with a condition | 0.57 (1.20): the greys have 1.1 of chroma |
+| Lab D50, ranges ±100, ±150, ±200 | fails | +17, -10.5, -25 of chroma: the device shows a* and b* times 128 / the half width of the range |
+| Lab D50, range ±256 with a* and b* doubled | works | 0.31 (0.00): the law holds |
+| ICC Rec. 2020, gamma 2.4 | works | 0.00 |
+| ICC Rec. 2020 of Apple (OETF) | fails | 5.2 (5.5): the same as ours, so the device decodes every Rec. 2020 profile with gamma 2.4 |
+
+Part B (by eye, first readable step, all five encodings the same): red 3, green 5, cyan 4. A perfect viewer
+on a Display P3 screen reaches CIEDE2000 1.9, 4.7 and 4.1 at those steps (2.4 and 2.8 earlier for green and
+cyan), so the colours are shown with less contrast than a P3 screen can, in every row, the control included.
+Beyond the edge of Display P3 (step 5) nothing was reported: the screenshots of the pages are what says if the
+rows differ from the control there.
+
+## Round 2 of the probe
 
 `python3 spec.py OUT --round 2` (with `APPLE_REC2020=` the path of Apple's Rec. 2020 profile, taken from a
 PDF that Safari made, which is not in the repository): the carriers with matrix = diag(white) (gamma 1 and
