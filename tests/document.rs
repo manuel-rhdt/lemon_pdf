@@ -1225,5 +1225,8 @@ fn page_mode_is_written_to_the_catalog() {
         assert_eq!(page_mode.as_name().unwrap(), b"UseOutlines");
         let (_, document) = build_and_load(mode, |context| context.set_page_mode(PageMode::UseThumbs));
         assert_eq!(document.catalog().unwrap().get(b"PageMode").unwrap().as_name().unwrap(), b"UseThumbs");
+        // a variant that is written under another name than its own (`#[rename]`)
+        let (_, document) = build_and_load(mode, |context| context.set_page_mode(PageMode::UseOc));
+        assert_eq!(document.catalog().unwrap().get(b"PageMode").unwrap().as_name().unwrap(), b"UseOC");
     }
 }
