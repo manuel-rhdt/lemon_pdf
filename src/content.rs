@@ -129,7 +129,7 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     /// and returns its resource name. Adding an equal space again returns the same name.
     pub fn add_color_space(&mut self, space: impl Into<ColorSpaceResource>) -> Name {
         let space = space.into();
-        if let Some((_, key)) = self.color_spaces.iter().find(|(other, _)| *other == space) {
+        if let Some((_, key)) = self.color_spaces.iter().find(|(other, key)| *other == space && !key.as_str().starts_with("Default")) {
             return key.clone();
         }
         let mut number = self.color_spaces.len();

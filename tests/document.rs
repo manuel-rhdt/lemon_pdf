@@ -1575,6 +1575,10 @@ fn a_default_colour_space_is_in_the_resources_of_the_page() {
                     let p3 = page.pdf_context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
                     let name = page.add_color_space(p3);
                     page.set_fill_color_components(&name, &[1.0, 0.0, 0.0])?;
+                    // the same space as the default one is still a space of its own, not the default
+                    let same = page.add_color_space(srgb);
+                    assert_ne!(same.as_str(), "DefaultRGB");
+                    page.set_fill_color_components(&same, &[0.2, 0.4, 0.6])?;
                     page.device_rgb_fill_color(0.2, 0.4, 0.6)
                 })
                 .unwrap();
@@ -1587,7 +1591,7 @@ fn a_default_colour_space_is_in_the_resources_of_the_page() {
             let default = spaces.get(b"DefaultRGB").expect("DefaultRGB");
             let array = document.dereference(default).unwrap().1.as_array().unwrap();
             assert_eq!(array[0].as_name().unwrap(), b"ICCBased");
-            assert_eq!(spaces.len(), 2, "DefaultRGB and the space of the red");
+            assert_eq!(spaces.len(), 3, "DefaultRGB, the space of the red, and the sRGB one that is an ordinary space");
         }
         // the sRGB profile is in the file once
         assert_eq!(bytes.windows(4).filter(|window| *window == b"acsp").count(), 2, "mode object_streams={mode}");
