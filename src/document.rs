@@ -21,6 +21,7 @@ use crate as lemon_pdf;
 
 use crate::crossref::CrossRef;
 use crate::object::{Formatter, IndirectObject, IndirectReference, RawIndirectReference, TextString};
+use crate::outline::{OutlineEntry, OutlineItem, Outlines};
 use crate::pagetree::{Page, Pages};
 use crate::stream::Stream;
 use crate::{structure_tree::StructTreeRoot, trailer::Trailer};
@@ -110,6 +111,7 @@ pub(crate) struct DocumentCatalog {
     lang: Option<TextString>,
     viewer_preferences: Option<ViewerPreferences>,
     metadata: Option<IndirectReference<Stream<MetadataDict>>>,
+    outlines: Option<IndirectReference<Outlines>>,
 }
 
 /// The dictionary of a metadata stream (ISO 32000-1, 14.3.2), whose data is an XMP packet.
@@ -200,6 +202,7 @@ impl<'a> DocumentContext<'a> {
             lang: None,
             viewer_preferences: None,
             metadata: None,
+            outlines: None,
         });
         context.start_pdf()?;
         Ok(context)
@@ -368,6 +371,57 @@ impl<'a> DocumentContext<'a> {
             catalog.metadata = Some(reference);
         }
         Ok(())
+    }
+
+    /// Sets the document outline (bookmarks): the tree of `items` becomes the `/Outlines` entry of
+    /// the document catalog. The pages that the destinations refer to may not be written yet.
+    pub fn set_outlines(&mut self, items: &[OutlineItem]) -> Result<(), Error> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let root: IndirectReference<Outlines> = self.create_reference();
+        let root_entry: IndirectReference<OutlineEntry> = IndirectReference::new(root.raw().0, root.raw().1);
+        let (first, last, count) = self.write_outline_level(items, root_entry)?;
+        self.write_reserved_object(
+            root,
+            Outlines {
+                first,
+                last,
+                count,
+            },
+        )?;
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.outlines = Some(root);
+        }
+        Ok(())
+    }
+
+    /// Writes the siblings `items` below `parent`. Returns the first and the last of them and
+    /// the number of items that are visible at this level and below.
+    fn write_outline_level(
+        &mut self,
+        items: &[OutlineItem],
+        parent: IndirectReference<OutlineEntry>,
+    ) -> Result<(Option<IndirectReference<OutlineEntry>>, Option<IndirectReference<OutlineEntry>>, i64), Error> {
+        let references: Vec<IndirectReference<OutlineEntry>> =
+            items.iter().map(|_| self.create_reference()).collect();
+        let mut visible = 0;
+        for (index, item) in items.iter().enumerate() {
+            let (first, last, descendants) = self.write_outline_level(&item.children, references[index])?;
+            visible += 1 + if item.open { descendants } else { 0 };
+            let entry = OutlineEntry {
+                title: TextString(item.title.clone()),
+                parent,
+                prev: index.checked_sub(1).map(|i| references[i]),
+                next: references.get(index + 1).copied(),
+                first,
+                last,
+                count: (descendants > 0).then(|| if item.open { descendants } else { -descendants }),
+                dest: item.destination.clone(),
+            };
+            self.write_reserved_object(references[index], entry)?;
+        }
+        Ok((references.first().copied(), references.last().copied(), visible))
     }
 
     /// Makes viewers show the `Title` of the document information instead of the file name.
