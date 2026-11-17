@@ -233,7 +233,13 @@ pub fn display_p3_profile() -> Vec<u8> {
     )
 }
 
-/// A profile of Rec. ITU-R BT.2020.
+/// A profile of Rec. ITU-R BT.2020 with its transfer function (the OETF, which is also the curve of
+/// the CSS space `rec2020`).
+///
+/// Not right on iOS: measured on an iPhone 16 Pro, the device decodes the coordinates of this profile
+/// with a pure gamma of 2.4 and not with this curve (the fit is 0.14 CIEDE2000 against 5.4). A profile
+/// with the primaries of Rec. 2020 and the gamma 2.4 itself is right there (0.00):
+/// [`rec2020_gamma24_profile`].
 pub fn rec2020_profile() -> Vec<u8> {
     rgb_matrix_profile(
         "Rec. ITU-R BT.2020",
@@ -241,6 +247,18 @@ pub fn rec2020_profile() -> Vec<u8> {
         (0.165_697, 0.675_318, 0.029_978),
         (0.125_083, 0.045_623, 0.797_059),
         ParametricCurve::REC2020,
+    )
+}
+
+/// A profile with the primaries of Rec. ITU-R BT.2020 and a pure gamma of 2.4 (BT.1886), which an iPhone
+/// shows as the profile says. The coordinates of a colour are the linear ones to the power of 1/2.4.
+pub fn rec2020_gamma24_profile() -> Vec<u8> {
+    rgb_matrix_profile(
+        "Rec. 2020 gamma 2.4",
+        (0.673_515, 0.279_059, -0.001_932),
+        (0.165_697, 0.675_318, 0.029_978),
+        (0.125_083, 0.045_623, 0.797_059),
+        ParametricCurve { g: 2.4, a: 1.0, b: 0.0, c: 0.0, d: 0.0 },
     )
 }
 

@@ -125,6 +125,57 @@ def variants():
     return v
 
 
+APPLE_REC2020 = os.environ.get("APPLE_REC2020", "")   # Apple's own profile, from a PDF of Safari; not in the repository
+
+
+def carrier(white, gamma=1.0):
+    """CalRGB whose matrix is diag(white), so that the components (1, 1, 1) are the white point: the
+    components are (XYZ / white) ** (1 / gamma)."""
+    return f"calrgb {fmt(white)} {gamma} {gamma} {gamma} {white[0]:.9f} 0 0 0 {white[1]:.9f} 0 0 0 {white[2]:.9f}"
+
+
+def carrier_normalised_encoder(white, gamma=1.0):
+    def enc(xyz65):
+        xyz = xyz65 if np.allclose(white, C.D65) else C.adapt(xyz65, C.D65, white)
+        return (xyz / white) ** (1 / gamma)
+    return enc
+
+
+def variants_round2():
+    """Round 2: only what round 1 changed."""
+    v = []
+    for pid, label, space, enc, tests in [
+        ("N01", "CalRGB: XYZ / white, D65, gamma 1", carrier(C.D65), carrier_normalised_encoder(C.D65), "matrix = diag(white)"),
+        ("N02", "CalRGB: (XYZ / white)^(1/2.2), D65, gamma 2.2", carrier(C.D65, 2.2), carrier_normalised_encoder(C.D65, 2.2), "gamma 2.2 with diag(white)"),
+        ("N03", "CalRGB: XYZ / white, D50, gamma 1", carrier(C.D50), carrier_normalised_encoder(C.D50), "a D50 white point"),
+    ]:
+        v.append(dict(id=pid, label=label, space=space, enc=enc, tests=tests))
+    mflat = C.M_SRGB.T.flatten()
+    v.append(dict(id="N04", label="CalRGB: sRGB primaries, gamma 2.2 (control)", space=f"calrgb {fmt(C.D65)} 2.2 2.2 2.2 {fmt(mflat)}", enc=calrgb22_encoder(), tests="the control that was exact"))
+    for pid, rng in [("LA1", (-128, 127)), ("LA2", (-128, 128)), ("LA3", (-127, 127)), ("LA4", (-100, 100)), ("LA5", (-150, 150)), ("LA6", (-200, 200))]:
+        v.append(dict(id=pid, label=f"Lab D50, range {rng[0]}..{rng[1]}", space=f"lab {fmt(C.D50)} {rng[0]} {rng[1]} {rng[0]} {rng[1]}", enc=lab_encoder(C.D50, True), tests="the range"))
+    doubled = lab_encoder(C.D50, True)
+    v.append(dict(id="LB1", label="Lab D50, range +-256, a* and b* doubled", space=f"lab {fmt(C.D50)} -256 256 -256 256",
+                  enc=lambda x: np.array([doubled(x)[0], 2 * doubled(x)[1], 2 * doubled(x)[2]]), tests="the scaling law"))
+    v.append(dict(id="G1", label="ICC Rec.2020 gamma 2.4 (lemon, control)", profiles=["profile p_r20g24l lemon rec2020_g24"], space="icc p_r20g24l",
+                  enc=rgb_encoder(C.M_REC2020, C.gamma_enc(2.4)), tests="the exact one"))
+    if APPLE_REC2020:
+        v.append(dict(id="G2", label="ICC Rec.2020 of Apple, OETF coordinates", profiles=[f"profile p_apple2020 file {APPLE_REC2020}"], space="icc p_apple2020",
+                      enc=rgb_encoder(C.M_REC2020, C.rec2020_enc), tests="does Apple's own profile get gamma 2.4"))
+    return v
+
+
+PAGES_A2 = [["N01", "N02", "N03", "N04", "LA1", "LA2", "LA3", "LA4", "LA5", "LA6", "LB1", "G1"], ["G2"]]
+
+
+def ladder_variants_round2():
+    v = [dict(x) for x in ladder_variants() if x["id"] in ("P3v4", "P3v2")]
+    v.append(dict(id="R24", label="ICC Rec.2020 gamma 2.4", profiles=["profile p_r20g24l lemon rec2020_g24"], space="icc p_r20g24l", enc=rgb_encoder(C.M_REC2020, C.gamma_enc(2.4)), clip=False))
+    v.append(dict(id="N01", label="CalRGB XYZ / white, D65", space=carrier(C.D65), enc=carrier_normalised_encoder(C.D65), clip=False))
+    v.append(dict(id="L128", label="Lab D50, range -128..127", space=f"lab {fmt(C.D50)} -128 127 -128 127", enc=lab_encoder(C.D50, True), clip=False))
+    return v
+
+
 PAGES_A = [["C00", "C01", "I01", "I02", "I03", "I04", "I05", "I06", "I07", "I08", "K01", "K02"],
            ["K03", "K04", "L01", "L02", "L03", "L04", "R00", "R10", "R11", "R12", "R13"],
            ["R20", "R21", "R22", "R23"]]
@@ -161,8 +212,8 @@ def ladder_variants():
 
 # ----------------------------------------------------------------------------- the writer
 class Probe:
-    def __init__(self, out, mutate=None):
-        self.out, self.mutate = out, mutate
+    def __init__(self, out, mutate=None, round_no=1):
+        self.out, self.mutate, self.round_no = out, mutate, round_no
         self.lines = []
         self.layout = {"page": [PAGE_W, PAGE_H], "pages": [], "calibration": [], "patches": [], "ladders": [], "variants": {}}
         self.profile_lines, self.space_lines, self.space_ids = {}, {}, {}
@@ -232,16 +283,17 @@ class Probe:
                 target_xyz65=[float(t) for t in xyz65], coords=[float(c) for c in coords]))
 
     def part_a(self):
-        by_id = {v["id"]: v for v in variants()}
-        for n, ids in enumerate(PAGES_A):
-            page = self.add_page(f"Part A, page {n + 1}: do the pairs match?")
+        by_id = {v["id"]: v for v in (variants() if self.round_no == 1 else variants_round2())}
+        pages = PAGES_A if self.round_no == 1 else [[i for i in page if i in by_id] for page in PAGES_A2]
+        for n, ids in enumerate(pages):
+            page = self.add_page(f"Part A{'' if self.round_no == 1 else ' (round 2)'}, page {n + 1}: do the pairs match?")
             for r, vid in enumerate(ids):
                 self.row(page, by_id[vid], 72 + r * 44)
 
     def part_b(self):
         for hue in HUES_B:
-            page = self.add_page(f"Part B, {hue}: first and last readable step")
-            for r, v in enumerate(ladder_variants()):
+            page = self.add_page(f"Part B{'' if self.round_no == 1 else ' (round 2)'}, {hue}: first and last readable step")
+            for r, v in enumerate(ladder_variants() if self.round_no == 1 else ladder_variants_round2()):
                 sid = self.declare(v)
                 y0 = 72 + r * 108
                 self.lines.append(f"text 14 {y0 + 8} 8 1 0.1 {v['id']}  {v['label']}")
@@ -278,11 +330,11 @@ def write_profiles(directory):
     open(f"{directory}/intent_lut.icc", "wb").write(iccgen.lut_profile("Intent LUT", perceptual, relative, saturation))
 
 
-def build(directory, parts=("A", "B"), mutate=None):
+def build(directory, parts=("A", "B"), mutate=None, round_no=1):
     os.makedirs(directory, exist_ok=True)
     directory = os.path.abspath(directory)
     write_profiles(directory)
-    probe = Probe(directory, mutate)
+    probe = Probe(directory, mutate, round_no)
     if "A" in parts:
         probe.part_a()
     if "B" in parts:
@@ -294,5 +346,6 @@ def build(directory, parts=("A", "B"), mutate=None):
 if __name__ == "__main__":
     out = sys.argv[1]
     mutate = sys.argv[sys.argv.index("--mutate") + 1] if "--mutate" in sys.argv else None
-    probe = build(out, mutate=mutate)
+    round_no = int(sys.argv[sys.argv.index("--round") + 1]) if "--round" in sys.argv else 1
+    probe = build(out, mutate=mutate, round_no=round_no)
     print(f"{len(probe.layout['patches'])} patch pairs, {len(probe.layout['ladders'])} ladders, pages: {probe.layout['pages']}")

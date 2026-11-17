@@ -30,12 +30,18 @@ pub struct LabColorSpace {
 }
 
 impl LabColorSpace {
-    /// CIELAB relative to the D50 white, with a range that holds the colours of every gamut that
-    /// CSS has (Rec. 2020 and ProPhoto RGB reach about ±200) and then some.
+    /// CIELAB relative to the D50 white, with the range of a* and b* of -128 to 127, the usual one
+    /// of CIELAB in 8 bits.
+    ///
+    /// A wider range is a trap on iOS: measured on an iPhone 16 Pro (Preview, Files), a range of
+    /// ±256 shows a* and b* at exactly half (the fit is 0.50, the error 0.16 CIEDE2000 against 3.4
+    /// for the unscaled values), while -128 to 127 is right (0.6). The device seems to scale the
+    /// colours so that the range is ±128. A* and b* outside of -128 to 127 (the greens of Rec. 2020
+    /// reach -160) are not shown by such a space on that device: use another encoding for them.
     pub fn d50() -> Self {
         LabColorSpace {
             white_point: D50_WHITE_POINT,
-            range: [-256.0, 256.0, -256.0, 256.0],
+            range: [-128.0, 127.0, -128.0, 127.0],
         }
     }
 }
@@ -73,6 +79,25 @@ pub struct CalRgbColorSpace {
     pub gamma: [f64; 3],
     /// The XYZ of the red, green and blue colorants, one after another (`XA YA ZA XB YB ZB XC YC ZC`).
     pub matrix: [f64; 9],
+}
+
+impl CalRgbColorSpace {
+    /// A space with gamma 1 whose three components are the CIE XYZ of the colour divided by the white
+    /// point (`X / Xw`, `Y / Yw`, `Z / Zw`), so that the components (1, 1, 1) are the white point.
+    ///
+    /// That last property is the one that matters: measured on an iPhone 16 Pro, the device scales
+    /// the matrix of a `CalRGB` space so that (1, 1, 1) is the white point, whatever the matrix says
+    /// (a carrier with a matrix of 1.2 and the white point of D65 or D50 was shown as `white *
+    /// components`: the fit is 0.7 and 0.5 CIEDE2000, against 6.8 and 6.7 for the PDF specification).
+    /// A matrix whose columns add up to the white point, like the one of sRGB, is the same for the
+    /// specification and for the device, and is exact there.
+    pub fn xyz_carrier(white_point: [f64; 3]) -> Self {
+        CalRgbColorSpace {
+            white_point,
+            gamma: [1.0; 3],
+            matrix: [white_point[0], 0.0, 0.0, 0.0, white_point[1], 0.0, 0.0, 0.0, white_point[2]],
+        }
+    }
 }
 
 impl PdfFormat for CalRgbColorSpace {

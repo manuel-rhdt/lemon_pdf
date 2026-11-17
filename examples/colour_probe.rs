@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! page WIDTH HEIGHT
-//! profile ID lemon srgb_v2 | p3_v4 | rec2020_v4
+//! profile ID lemon srgb_v2 | p3_v4 | rec2020_v4 | rec2020_g24
 //! profile ID matrix DESCRIPTION R(x y z) G(x y z) B(x y z) g a b c d   (D50 colorants, parametric curve)
 //! profile ID file PATH
 //! space ID device | gray
@@ -88,6 +88,7 @@ fn main() {
                         "srgb_v2" => lemon_pdf::icc::srgb_profile(),
                         "p3_v4" => lemon_pdf::icc::display_p3_profile(),
                         "rec2020_v4" => lemon_pdf::icc::rec2020_profile(),
+                        "rec2020_g24" => lemon_pdf::icc::rec2020_gamma24_profile(),
                         other => panic!("no lemon profile {other}"),
                     },
                     "matrix" => {

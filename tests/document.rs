@@ -1538,3 +1538,23 @@ fn colors_are_written_with_more_than_two_decimals() {
         assert!((matrix[0] - 0.486_571).abs() < 1e-6 && (matrix[7] - 0.079_287).abs() < 1e-6, "{matrix:?}");
     }
 }
+
+#[test]
+fn the_defaults_of_the_colour_spaces_are_the_ones_that_were_measured() {
+    use lemon_pdf::color_space::{CalRgbColorSpace, LabColorSpace, D50_WHITE_POINT};
+
+    // Lab: -128 to 127 is right on an iPhone, +-256 shows a* and b* at half
+    assert_eq!(LabColorSpace::d50().range, [-128.0, 127.0, -128.0, 127.0]);
+    // the XYZ carrier: the components (1, 1, 1) are the white point, whatever the white point is
+    for white in [D50_WHITE_POINT, [0.950_456, 1.0, 1.089_058]] {
+        let space = CalRgbColorSpace::xyz_carrier(white);
+        let m = space.matrix;
+        assert_eq!(space.gamma, [1.0; 3]);
+        // the columns of the matrix add up to the white point
+        assert_eq!([m[0] + m[3] + m[6], m[1] + m[4] + m[7], m[2] + m[5] + m[8]], white);
+    }
+    // the gamma 2.4 profile of Rec. 2020 is a profile like the other ones
+    let profile = lemon_pdf::icc::rec2020_gamma24_profile();
+    assert_eq!(&profile[36..40], b"acsp");
+    assert!(profile.len() < 700);
+}
