@@ -1215,3 +1215,174 @@ fn outline_is_a_linked_tree() {
         assert!(section.get(b"Next").is_ok());
     }
 }
+
+#[test]
+fn page_mode_is_written_to_the_catalog() {
+    use lemon_pdf::PageMode;
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| context.set_page_mode(PageMode::UseOutlines));
+        let page_mode = document.catalog().unwrap().get(b"PageMode").unwrap();
+        assert_eq!(page_mode.as_name().unwrap(), b"UseOutlines");
+        let (_, document) = build_and_load(mode, |context| context.set_page_mode(PageMode::UseThumbs));
+        assert_eq!(document.catalog().unwrap().get(b"PageMode").unwrap().as_name().unwrap(), b"UseThumbs");
+        // a variant that is written under another name than its own (`#[rename]`)
+        let (_, document) = build_and_load(mode, |context| context.set_page_mode(PageMode::UseOc));
+        assert_eq!(document.catalog().unwrap().get(b"PageMode").unwrap().as_name().unwrap(), b"UseOC");
+    }
+}
+
+#[test]
+fn named_destinations_are_a_sorted_name_tree() {
+    use lemon_pdf::annotation::Destination;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let page = context.create_reference();
+            let at = |y: f64| Destination { page, point: (Pt(0.0), Pt(y)) };
+            // given out of order, and `b` twice: the last one counts
+            context.set_named_destinations(vec![
+                (b"b".to_vec(), at(1.0)),
+                (b"a".to_vec(), at(2.0)),
+                (b"b".to_vec(), at(3.0)),
+            ]);
+            context.add_reserved_page(page, Page::new()).unwrap();
+        });
+        let names = document.catalog().unwrap().get(b"Names").unwrap();
+        let names = document.dereference(names).unwrap().1.as_dict().unwrap();
+        let dests = document.dereference(names.get(b"Dests").unwrap()).unwrap().1.as_dict().unwrap();
+        let entries = dests.get(b"Names").unwrap().as_array().unwrap();
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].as_str().unwrap(), b"a");
+        assert_eq!(entries[2].as_str().unwrap(), b"b");
+        let destination = entries[3].as_array().unwrap();
+        assert_eq!(destination[1].as_name().unwrap(), b"XYZ");
+        assert_eq!(destination[3].as_float().unwrap(), 3.0);
+    }
+}
+
+#[test]
+fn page_labels_are_a_number_tree_with_a_first_range() {
+    use lemon_pdf::page_labels::{PageLabel, PageLabelStyle};
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            for i in 0..6 {
+                add_text_page(context, &format!("Page {}", i + 1), None);
+            }
+            // no range at page 0: a decimal one is added
+            context.set_page_labels(vec![
+                (2, PageLabel::numbered(PageLabelStyle::LowerRoman, 3)),
+                (4, PageLabel::numbered(PageLabelStyle::UpperLetters, 1).with_prefix("A-")),
+            ]);
+        });
+        let labels = document.catalog().unwrap().get(b"PageLabels").unwrap();
+        let labels = document.dereference(labels).unwrap().1.as_dict().unwrap();
+        let nums = labels.get(b"Nums").unwrap().as_array().unwrap();
+        assert_eq!(nums.len(), 6);
+        assert_eq!(nums[0].as_i64().unwrap(), 0);
+        assert_eq!(nums[1].as_dict().unwrap().get(b"S").unwrap().as_name().unwrap(), b"D");
+        assert_eq!(nums[2].as_i64().unwrap(), 2);
+        let roman = nums[3].as_dict().unwrap();
+        assert_eq!(roman.get(b"S").unwrap().as_name().unwrap(), b"r");
+        assert_eq!(roman.get(b"St").unwrap().as_i64().unwrap(), 3);
+        assert!(roman.get(b"P").is_err());
+        let appendix = nums[5].as_dict().unwrap();
+        assert_eq!(appendix.get(b"S").unwrap().as_name().unwrap(), b"A");
+        assert_eq!(appendix.get(b"P").unwrap().as_str().unwrap(), b"A-");
+    }
+}
+
+#[test]
+fn viewer_preferences_are_written_entry_by_entry() {
+    use lemon_pdf::viewer_preferences::{Direction, Duplex, PrintScaling, ViewerPreferences};
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            context.set_display_doc_title(true);
+            // the title preference stays when another entry is set
+            context.viewer_preferences_mut().print_scaling = Some(PrintScaling::None);
+            context.viewer_preferences_mut().direction = Some(Direction::R2L);
+            context.viewer_preferences_mut().duplex = Some(Duplex::DuplexFlipLongEdge);
+            context.viewer_preferences_mut().print_page_range = Some(vec![1, 3, 5, 6]);
+            context.viewer_preferences_mut().num_copies = Some(2);
+            context.viewer_preferences_mut().pick_tray_by_pdf_size = Some(true);
+            context.viewer_preferences_mut().hide_window_ui = Some(false);
+        });
+        let preferences = document.catalog().unwrap().get(b"ViewerPreferences").unwrap();
+        let preferences = document.dereference(preferences).unwrap().1.as_dict().unwrap();
+        assert!(preferences.get(b"DisplayDocTitle").unwrap().as_bool().unwrap());
+        assert_eq!(preferences.get(b"PrintScaling").unwrap().as_name().unwrap(), b"None");
+        assert_eq!(preferences.get(b"Direction").unwrap().as_name().unwrap(), b"R2L");
+        assert_eq!(preferences.get(b"Duplex").unwrap().as_name().unwrap(), b"DuplexFlipLongEdge");
+        assert_eq!(preferences.get(b"PrintPageRange").unwrap().as_array().unwrap().len(), 4);
+        assert_eq!(preferences.get(b"NumCopies").unwrap().as_i64().unwrap(), 2);
+        assert!(preferences.get(b"PickTrayByPDFSize").unwrap().as_bool().unwrap());
+        assert!(!preferences.get(b"HideWindowUI").unwrap().as_bool().unwrap());
+        // entries that are not set are not written
+        assert!(preferences.get(b"HideToolbar").is_err());
+        assert!(preferences.get(b"ViewArea").is_err());
+
+        let (_, document) = build_and_load(mode, |context| {
+            context.set_viewer_preferences(ViewerPreferences { fit_window: Some(true), ..Default::default() })
+        });
+        let preferences = document.catalog().unwrap().get(b"ViewerPreferences").unwrap();
+        let preferences = document.dereference(preferences).unwrap().1.as_dict().unwrap();
+        assert!(preferences.get(b"FitWindow").unwrap().as_bool().unwrap());
+        assert!(preferences.get(b"DisplayDocTitle").is_err());
+    }
+}
+
+#[test]
+fn output_intents_embed_their_profile() {
+    use lemon_pdf::output_intent::{OutputIntentDesc, OutputIntentSubtype};
+
+    for &mode in &MODES {
+        for &filter in &[None, Some(StreamFilter::Deflate)] {
+            let (_, document) = build_and_load(mode, |context| {
+                context
+                    .add_output_intent(
+                        OutputIntentDesc {
+                            subtype: OutputIntentSubtype::PdfA,
+                            output_condition_identifier: "sRGB IEC61966-2.1".to_owned(),
+                            info: Some("sRGB".to_owned()),
+                            profile: lemon_pdf::icc::srgb_profile(),
+                            components: 3,
+                        },
+                        filter,
+                    )
+                    .unwrap();
+            });
+            let intents = document.catalog().unwrap().get(b"OutputIntents").unwrap();
+            let intents = document.dereference(intents).unwrap().1.as_array().unwrap();
+            assert_eq!(intents.len(), 1);
+            let intent = document.dereference(&intents[0]).unwrap().1.as_dict().unwrap();
+            assert_eq!(intent.get(b"S").unwrap().as_name().unwrap(), b"GTS_PDFA1");
+            assert_eq!(intent.get(b"Type").unwrap().as_name().unwrap(), b"OutputIntent");
+            let profile = document.dereference(intent.get(b"DestOutputProfile").unwrap()).unwrap().1;
+            let profile = profile.as_stream().unwrap();
+            assert_eq!(profile.dict.get(b"N").unwrap().as_i64().unwrap(), 3);
+            let content = profile.decompressed_content().unwrap_or_else(|_| profile.content.clone());
+            assert_eq!(content, lemon_pdf::icc::srgb_profile());
+        }
+    }
+}
+
+#[test]
+fn link_annotations_are_printed() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            let link = LinkAnnotation::new(
+                [Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0)],
+                LinkAction::Uri(UriAction { uri: ByteString::from("https://example.com") }),
+            );
+            page.add_annotation(context, Annotation::Link(link)).unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let annotations = document.get_page_annotations(page).unwrap();
+        assert_eq!(annotations.len(), 1);
+        // the print flag, and none of the flags that PDF/A forbids
+        assert_eq!(annotations[0].get(b"F").unwrap().as_i64().unwrap(), 4);
+    }
+}

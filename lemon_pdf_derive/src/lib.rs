@@ -28,6 +28,10 @@ use syn::{
 ///   Fields of type `Option<T>` are skipped when they are `None` without this attribute.
 /// - `#[flatten]`: write the entries of the field (a `PdfDictionary`) into this dictionary.
 ///
+/// Variant attributes:
+/// - `#[rename("Name")]`: the name that a unit variant is written as (default: the variant name,
+///   as it is spelled).
+///
 /// Enum attributes:
 /// - `#[indirect_variants]`: implement `From<IndirectReference<Variant>>` for
 ///   `IndirectReference<Enum>`, so that a reference to a variant can be used where a reference
@@ -316,7 +320,9 @@ fn impl_enum_pdf_format(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
             let ident = &variant.ident;
             match &variant.fields {
                 Fields::Unit => {
-                    let variant_name = ident.to_string();
+                    let variant_name = parse_attributes(&variant.attrs)
+                        .rename
+                        .unwrap_or_else(|| ident.to_string());
                     quote! { #name::#ident => lemon_pdf::object::write_name(f, #variant_name) }
                 }
                 Fields::Unnamed(FieldsUnnamed { unnamed, .. }) if unnamed.len() == 1 => {
