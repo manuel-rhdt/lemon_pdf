@@ -1386,3 +1386,37 @@ fn link_annotations_are_printed() {
         assert_eq!(annotations[0].get(b"F").unwrap().as_i64().unwrap(), 4);
     }
 }
+
+#[test]
+fn lab_colors_use_a_named_color_space() {
+    use lemon_pdf::color_space::LabColorSpace;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                let key = page.add_lab_color_space(LabColorSpace::d50());
+                // the same space again has the same name
+                assert_eq!(page.add_lab_color_space(LabColorSpace::d50()), key);
+                page.lab_fill_color(&key, 54.0, 106.5, 40.0)?;
+                page.lab_stroke_color(&key, 10.0, -20.0, 30.0)?;
+                Ok(())
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        let content: Vec<&str> = content.split_whitespace().collect();
+        let operations = content.join(" ");
+        assert!(operations.contains("/CS0 cs 54 106.5 40 sc"), "{operations}");
+        assert!(operations.contains("/CS0 CS 10 -20 30 SC"), "{operations}");
+        let (resources, _) = document.get_page_resources(page).unwrap();
+        let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
+        let space = spaces.get(b"CS0").unwrap().as_array().unwrap();
+        assert_eq!(space[0].as_name().unwrap(), b"Lab");
+        let parameters = space[1].as_dict().unwrap();
+        assert_eq!(parameters.get(b"WhitePoint").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(parameters.get(b"Range").unwrap().as_array().unwrap().len(), 4);
+    }
+}

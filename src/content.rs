@@ -18,6 +18,7 @@ use std::io::{Result, Write};
 use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 use crate as lemon_pdf;
 
+use crate::color_space::LabColorSpace;
 use crate::font::Font;
 use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
 use crate::image::XObject;
@@ -74,6 +75,8 @@ pub struct PageContext<'page, 'context, 'context_borrow> {
     /// Shadings and shading patterns with their resource names, a `Vec` for the same reason.
     pub(crate) shadings: Vec<(Shading, Name)>,
     pub(crate) patterns: Vec<(Pattern, Name)>,
+    /// The named colour spaces.
+    pub(crate) color_spaces: Vec<(LabColorSpace, Name)>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -113,6 +116,31 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         let key = Name::from(format!("GS{}", self.ext_g_states.len()));
         self.ext_g_states.push((state, key.clone()));
         key
+    }
+
+    /// Adds a colour space to the resources of the page and returns its resource name. Adding an
+    /// equal space again returns the same name.
+    pub fn add_lab_color_space(&mut self, space: LabColorSpace) -> Name {
+        if let Some((_, key)) = self.color_spaces.iter().find(|(other, _)| *other == space) {
+            return key.clone();
+        }
+        let key = Name::from(format!("CS{}", self.color_spaces.len()));
+        self.color_spaces.push((space, key.clone()));
+        key
+    }
+
+    /// Makes fills use a colour of a Lab space from `add_lab_color_space` (`cs` and `sc`
+    /// operators).
+    pub fn lab_fill_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
+        self.write_operation1(space, "cs")?;
+        self.write_operation3(l, a, b, "sc")
+    }
+
+    /// Makes strokes use a colour of a Lab space from `add_lab_color_space` (`CS` and `SC`
+    /// operators).
+    pub fn lab_stroke_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
+        self.write_operation1(space, "CS")?;
+        self.write_operation3(l, a, b, "SC")
     }
 
     /// Applies a graphics state parameter dictionary from `add_ext_gstate` (`gs` operator).
@@ -475,6 +503,11 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
                 .into_iter()
                 .map(|(pattern, key)| (key, pattern))
                 .collect(),
+            color_space: self
+                .color_spaces
+                .into_iter()
+                .map(|(space, key)| (key, space))
+                .collect(),
         };
         (resources, self.content_stream, self.page, self.pdf_context)
     }
@@ -513,6 +546,7 @@ impl<'context> DocumentContext<'context> {
             ext_g_states: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
             content_stream: StreamEncoder::new(stream_filter),
             page: &mut page,
             pdf_context: self,
@@ -549,6 +583,7 @@ impl<'context> DocumentContext<'context> {
             ext_g_states: Vec::new(),
             shadings: Vec::new(),
             patterns: Vec::new(),
+            color_spaces: Vec::new(),
             content_stream: StreamEncoder::new(stream_filter),
             page: &mut page,
             pdf_context: self,
