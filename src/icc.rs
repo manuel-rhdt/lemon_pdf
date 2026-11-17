@@ -262,6 +262,52 @@ pub fn rec2020_gamma24_profile() -> Vec<u8> {
     )
 }
 
+/// What the header of an ICC profile says (ICC.1, 7.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProfileInfo {
+    /// The number of colour components of the data colour space: 1 (`GRAY`), 3 (`RGB `) or 4 (`CMYK`).
+    pub components: u32,
+    /// The major version of the profile (2 or 4).
+    pub major_version: u8,
+    /// The class of the profile: `mntr`, `scnr`, `prtr` or `spac`, the ones that PDF takes.
+    pub class: [u8; 4],
+}
+
+/// Reads the header of an ICC profile and says if a PDF can use it as the colour space of an image
+/// or of colours (`ICCBased`, ISO 32000-1, 8.6.5.5): the size and the `acsp` signature must be right,
+/// the class one of input, display, output or colour space, the data colour space gray, RGB or
+/// CMYK, the profile connection space XYZ or Lab, and the major version 2 to 4. It does not check the tags.
+pub fn inspect_profile(profile: &[u8]) -> Result<ProfileInfo, &'static str> {
+    if profile.len() < 128 {
+        return Err("shorter than the header of 128 bytes");
+    }
+    let size = u32::from_be_bytes([profile[0], profile[1], profile[2], profile[3]]) as usize;
+    if size != profile.len() {
+        return Err("the size in the header is not the size of the profile");
+    }
+    if &profile[36..40] != b"acsp" {
+        return Err("no `acsp` signature");
+    }
+    let major_version = profile[8];
+    if !(2..=4).contains(&major_version) {
+        return Err("version is not 2, 3 or 4");
+    }
+    let class = [profile[12], profile[13], profile[14], profile[15]];
+    if ![*b"mntr", *b"scnr", *b"prtr", *b"spac"].contains(&class) {
+        return Err("not an input, display, output or colour space profile");
+    }
+    let components = match &profile[16..20] {
+        b"GRAY" => 1,
+        b"RGB " => 3,
+        b"CMYK" => 4,
+        _ => return Err("the data colour space is not gray, RGB or CMYK"),
+    };
+    if &profile[20..24] != b"XYZ " && &profile[20..24] != b"Lab " {
+        return Err("the connection space is not XYZ or Lab");
+    }
+    Ok(ProfileInfo { components, major_version, class })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1597,3 +1597,42 @@ fn a_default_colour_space_is_in_the_resources_of_the_page() {
         assert_eq!(bytes.windows(4).filter(|window| *window == b"acsp").count(), 2, "mode object_streams={mode}");
     }
 }
+
+#[test]
+fn an_image_can_have_an_icc_profile() {
+    use lemon_pdf::image::Image;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let p3 = context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
+            let image = Image::from_rgb8(1, 1, vec![255, 0, 0]).unwrap().with_icc_profile(p3);
+            let reference = context.write_image(image).unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                let name = page.add_xobject(reference);
+                page.draw_image(&name, Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let image = document.objects.values().find_map(|o| o.as_stream().ok().filter(|s| s.dict.get(b"Subtype").ok().and_then(|n| n.as_name().ok()) == Some(b"Image".as_slice()))).unwrap();
+        let space = image.dict.get(b"ColorSpace").unwrap();
+        let space = document.dereference(space).unwrap().1.as_array().unwrap();
+        assert_eq!(space[0].as_name().unwrap(), b"ICCBased");
+    }
+}
+
+#[test]
+fn the_header_of_an_icc_profile_is_checked() {
+    use lemon_pdf::icc::{inspect_profile, srgb_profile, display_p3_profile};
+
+    assert_eq!(inspect_profile(&srgb_profile()).unwrap().components, 3);
+    assert_eq!(inspect_profile(&display_p3_profile()).unwrap().major_version, 4);
+    assert!(inspect_profile(&[0; 10]).is_err());
+    let mut bad = srgb_profile();
+    bad[37] = b'x';
+    assert!(inspect_profile(&bad).is_err());
+    let mut truncated = srgb_profile();
+    truncated.pop();
+    assert!(inspect_profile(&truncated).is_err());
+}
