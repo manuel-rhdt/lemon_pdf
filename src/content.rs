@@ -234,6 +234,12 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         key
     }
 
+    /// Sets the rendering intent (`ri` operator), which tells a reader how to map the colours that
+    /// the device cannot show.
+    pub fn set_rendering_intent(&mut self, intent: crate::graphics_state::RenderingIntent) -> Result<()> {
+        self.write_operation1(intent, "ri")
+    }
+
     /// Makes fills use a pattern from `add_shading_pattern` or `add_tiling_pattern` as their color
     /// (`/Pattern cs` and `scn` operators).
     pub fn set_fill_pattern(&mut self, key: &Name) -> Result<()> {

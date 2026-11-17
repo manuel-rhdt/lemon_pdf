@@ -1466,3 +1466,19 @@ fn color_spaces_of_every_kind_are_resources() {
         assert_eq!(data, lemon_pdf::icc::display_p3_profile());
     }
 }
+
+#[test]
+fn the_rendering_intent_is_an_operator() {
+    use lemon_pdf::graphics_state::RenderingIntent;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |page| page.set_rendering_intent(RenderingIntent::Perceptual)).unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        assert!(content.split_whitespace().collect::<Vec<_>>().join(" ").contains("/Perceptual ri"), "{content}");
+    }
+}
