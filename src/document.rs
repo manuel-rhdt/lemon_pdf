@@ -22,10 +22,12 @@ use crate as lemon_pdf;
 use crate::crossref::CrossRef;
 use crate::object::{Formatter, IndirectObject, IndirectReference, RawIndirectReference, TextString};
 use crate::names::{DestinationTree, Names};
+use crate::page_labels::{PageLabel, PageLabelStyle};
+use crate::viewer_preferences::ViewerPreferences;
 use crate::outline::{OutlineEntry, OutlineItem, Outlines};
 use crate::pagetree::{Page, Pages};
 use crate::stream::Stream;
-use crate::{structure_tree::StructTreeRoot, trailer::Trailer};
+use crate::{structure_tree::{NumberTree, StructTreeRoot}, trailer::Trailer};
 use log::error;
 
 /// The document information dictionary, like `Title`, `Author` or `Subject`.
@@ -115,6 +117,7 @@ pub(crate) struct DocumentCatalog {
     outlines: Option<IndirectReference<Outlines>>,
     page_mode: Option<PageMode>,
     names: Option<Names>,
+    page_labels: Option<NumberTree<PageLabel>>,
 }
 
 /// How a viewer shows the document when it is opened (`/PageMode` of the catalog, ISO 32000-1,
@@ -159,13 +162,6 @@ struct MarkInfo {
     marked: bool,
 }
 
-#[derive(Debug, PdfFormat, Default)]
-#[omit_type(true)]
-struct ViewerPreferences {
-    /// Show the `Title` of the document information dictionary in the title bar of the viewer
-    /// instead of the file name.
-    display_doc_title: bool,
-}
 
 pub struct DocumentContext<'a> {
     pub(crate) output: OffsetTrackingWriter<Box<dyn Write + 'a>>,
@@ -227,6 +223,7 @@ impl<'a> DocumentContext<'a> {
             outlines: None,
             page_mode: None,
             names: None,
+            page_labels: None,
         });
         context.start_pdf()?;
         Ok(context)
@@ -477,10 +474,43 @@ impl<'a> DocumentContext<'a> {
 
     /// Makes viewers show the `Title` of the document information instead of the file name.
     pub fn set_display_doc_title(&mut self, display: bool) {
+        self.viewer_preferences_mut().display_doc_title = Some(display);
+    }
+
+    /// Sets the viewer preferences of the document (`/ViewerPreferences`), replacing the ones set
+    /// before.
+    pub fn set_viewer_preferences(&mut self, preferences: ViewerPreferences) {
         if let Some(catalog) = self.document_catalog.as_mut() {
-            catalog.viewer_preferences = Some(ViewerPreferences {
-                display_doc_title: display,
-            });
+            catalog.viewer_preferences = Some(preferences);
+        }
+    }
+
+    /// The viewer preferences of the document, to change single entries. The document has none
+    /// until this is called (or one of the setters).
+    pub fn viewer_preferences_mut(&mut self) -> &mut ViewerPreferences {
+        self.document_catalog
+            .as_mut()
+            .expect("No document catalog")
+            .viewer_preferences
+            .get_or_insert_with(ViewerPreferences::default)
+    }
+
+    /// Sets the labels of the pages (`/PageLabels`): `ranges` pairs the index of the first page of
+    /// a range (counted from 0) with the label of its pages. A range goes on up to the start of
+    /// the next one. A document must have a range that starts at page 0, so one with decimal
+    /// numbers is added if `ranges` has none; if a start is given twice, the last label counts.
+    pub fn set_page_labels(&mut self, ranges: impl IntoIterator<Item = (usize, PageLabel)>) {
+        let mut nums: BTreeMap<i64, PageLabel> = ranges
+            .into_iter()
+            .map(|(page, label)| (page as i64, label))
+            .collect();
+        if nums.is_empty() {
+            return;
+        }
+        nums.entry(0)
+            .or_insert_with(|| PageLabel::numbered(PageLabelStyle::Decimal, 1));
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.page_labels = Some(NumberTree { nums });
         }
     }
 

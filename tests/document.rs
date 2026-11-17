@@ -1259,3 +1259,75 @@ fn named_destinations_are_a_sorted_name_tree() {
         assert_eq!(destination[3].as_float().unwrap(), 3.0);
     }
 }
+
+#[test]
+fn page_labels_are_a_number_tree_with_a_first_range() {
+    use lemon_pdf::page_labels::{PageLabel, PageLabelStyle};
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            for i in 0..6 {
+                add_text_page(context, &format!("Page {}", i + 1), None);
+            }
+            // no range at page 0: a decimal one is added
+            context.set_page_labels(vec![
+                (2, PageLabel::numbered(PageLabelStyle::LowerRoman, 3)),
+                (4, PageLabel::numbered(PageLabelStyle::UpperLetters, 1).with_prefix("A-")),
+            ]);
+        });
+        let labels = document.catalog().unwrap().get(b"PageLabels").unwrap();
+        let labels = document.dereference(labels).unwrap().1.as_dict().unwrap();
+        let nums = labels.get(b"Nums").unwrap().as_array().unwrap();
+        assert_eq!(nums.len(), 6);
+        assert_eq!(nums[0].as_i64().unwrap(), 0);
+        assert_eq!(nums[1].as_dict().unwrap().get(b"S").unwrap().as_name().unwrap(), b"D");
+        assert_eq!(nums[2].as_i64().unwrap(), 2);
+        let roman = nums[3].as_dict().unwrap();
+        assert_eq!(roman.get(b"S").unwrap().as_name().unwrap(), b"r");
+        assert_eq!(roman.get(b"St").unwrap().as_i64().unwrap(), 3);
+        assert!(roman.get(b"P").is_err());
+        let appendix = nums[5].as_dict().unwrap();
+        assert_eq!(appendix.get(b"S").unwrap().as_name().unwrap(), b"A");
+        assert_eq!(appendix.get(b"P").unwrap().as_str().unwrap(), b"A-");
+    }
+}
+
+#[test]
+fn viewer_preferences_are_written_entry_by_entry() {
+    use lemon_pdf::viewer_preferences::{Direction, Duplex, PrintScaling, ViewerPreferences};
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            context.set_display_doc_title(true);
+            // the title preference stays when another entry is set
+            context.viewer_preferences_mut().print_scaling = Some(PrintScaling::None);
+            context.viewer_preferences_mut().direction = Some(Direction::R2L);
+            context.viewer_preferences_mut().duplex = Some(Duplex::DuplexFlipLongEdge);
+            context.viewer_preferences_mut().print_page_range = Some(vec![1, 3, 5, 6]);
+            context.viewer_preferences_mut().num_copies = Some(2);
+            context.viewer_preferences_mut().pick_tray_by_pdf_size = Some(true);
+            context.viewer_preferences_mut().hide_window_ui = Some(false);
+        });
+        let preferences = document.catalog().unwrap().get(b"ViewerPreferences").unwrap();
+        let preferences = document.dereference(preferences).unwrap().1.as_dict().unwrap();
+        assert!(preferences.get(b"DisplayDocTitle").unwrap().as_bool().unwrap());
+        assert_eq!(preferences.get(b"PrintScaling").unwrap().as_name().unwrap(), b"None");
+        assert_eq!(preferences.get(b"Direction").unwrap().as_name().unwrap(), b"R2L");
+        assert_eq!(preferences.get(b"Duplex").unwrap().as_name().unwrap(), b"DuplexFlipLongEdge");
+        assert_eq!(preferences.get(b"PrintPageRange").unwrap().as_array().unwrap().len(), 4);
+        assert_eq!(preferences.get(b"NumCopies").unwrap().as_i64().unwrap(), 2);
+        assert!(preferences.get(b"PickTrayByPDFSize").unwrap().as_bool().unwrap());
+        assert!(!preferences.get(b"HideWindowUI").unwrap().as_bool().unwrap());
+        // entries that are not set are not written
+        assert!(preferences.get(b"HideToolbar").is_err());
+        assert!(preferences.get(b"ViewArea").is_err());
+
+        let (_, document) = build_and_load(mode, |context| {
+            context.set_viewer_preferences(ViewerPreferences { fit_window: Some(true), ..Default::default() })
+        });
+        let preferences = document.catalog().unwrap().get(b"ViewerPreferences").unwrap();
+        let preferences = document.dereference(preferences).unwrap().1.as_dict().unwrap();
+        assert!(preferences.get(b"FitWindow").unwrap().as_bool().unwrap());
+        assert!(preferences.get(b"DisplayDocTitle").is_err());
+    }
+}

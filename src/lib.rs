@@ -31,11 +31,13 @@ pub mod mesh;
 pub mod names;
 pub mod object;
 pub mod outline;
+pub mod page_labels;
 pub mod pagetree;
 pub mod shading;
 pub mod stream;
 pub mod structure_tree;
 mod trailer;
+pub mod viewer_preferences;
 
 pub use self::content::{Matrix, Pt};
 pub use self::object::{IndirectObject, PdfDictionary, PdfFormat};
