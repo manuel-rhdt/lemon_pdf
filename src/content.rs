@@ -132,9 +132,30 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         if let Some((_, key)) = self.color_spaces.iter().find(|(other, _)| *other == space) {
             return key.clone();
         }
-        let key = Name::from(format!("CS{}", self.color_spaces.len()));
+        let mut number = self.color_spaces.len();
+        let key = loop {
+            let key = Name::from(format!("CS{}", number));
+            if !self.color_spaces.iter().any(|(_, other)| *other == key) {
+                break key;
+            }
+            number += 1;
+        };
         self.color_spaces.push((space, key.clone()));
         key
+    }
+
+    /// Defines what the device colours of this page mean (`DefaultRGB` and the like in the
+    /// resources): with an sRGB profile, `DeviceRGB` colours are sRGB in every viewer, images
+    /// and shadings included, instead of whatever the viewer takes the device to be. The space
+    /// must have as many components as the device space (`Rgb`: 3). Setting it again replaces it.
+    pub fn set_default_color_space(
+        &mut self,
+        kind: crate::color_space::DefaultColorSpace,
+        space: crate::color_space::IccBasedColorSpace,
+    ) {
+        let key = Name::from(kind.resource_name().to_owned());
+        self.color_spaces.retain(|(_, name)| *name != key);
+        self.color_spaces.push((space.into(), key));
     }
 
     /// Makes fills use a colour of a space from `add_color_space` (`cs` and `sc` operators): the

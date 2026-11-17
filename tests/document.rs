@@ -1558,3 +1558,38 @@ fn the_defaults_of_the_colour_spaces_are_the_ones_that_were_measured() {
     assert_eq!(&profile[36..40], b"acsp");
     assert!(profile.len() < 700);
 }
+
+#[test]
+fn a_default_colour_space_is_in_the_resources_of_the_page() {
+    use lemon_pdf::color_space::DefaultColorSpace;
+
+    for &mode in &MODES {
+        let (bytes, document) = build_and_load(mode, |context| {
+            for _ in 0..2 {
+                let srgb = context.icc_color_space("srgb", lemon_pdf::icc::srgb_profile, 3, None).unwrap();
+                let mut page = Page::new();
+                page.add_content(context, None, |page| {
+                    page.set_default_color_space(DefaultColorSpace::Rgb, srgb);
+                    // setting it again replaces it, and the names of other spaces stay distinct
+                    page.set_default_color_space(DefaultColorSpace::Rgb, srgb);
+                    let p3 = page.pdf_context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
+                    let name = page.add_color_space(p3);
+                    page.set_fill_color_components(&name, &[1.0, 0.0, 0.0])?;
+                    page.device_rgb_fill_color(0.2, 0.4, 0.6)
+                })
+                .unwrap();
+                context.add_page(page).unwrap();
+            }
+        });
+        for page in document.get_pages().values() {
+            let (resources, _) = document.get_page_resources(*page).unwrap();
+            let spaces = document.dereference(resources.unwrap().get(b"ColorSpace").unwrap()).unwrap().1.as_dict().unwrap();
+            let default = spaces.get(b"DefaultRGB").expect("DefaultRGB");
+            let array = document.dereference(default).unwrap().1.as_array().unwrap();
+            assert_eq!(array[0].as_name().unwrap(), b"ICCBased");
+            assert_eq!(spaces.len(), 2, "DefaultRGB and the space of the red");
+        }
+        // the sRGB profile is in the file once
+        assert_eq!(bytes.windows(4).filter(|window| *window == b"acsp").count(), 2, "mode object_streams={mode}");
+    }
+}

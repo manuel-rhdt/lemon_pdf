@@ -142,6 +142,25 @@ impl PdfFormat for IccBasedColorSpace {
     }
 }
 
+/// The device colour spaces that a page can redefine (`DefaultGray`, `DefaultRGB`, `DefaultCMYK`,
+/// ISO 32000-1, 8.6.5.6): every device colour of the page is then read in the space that was set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultColorSpace {
+    Gray,
+    Rgb,
+    Cmyk,
+}
+
+impl DefaultColorSpace {
+    pub(crate) fn resource_name(self) -> &'static str {
+        match self {
+            DefaultColorSpace::Gray => "DefaultGray",
+            DefaultColorSpace::Rgb => "DefaultRGB",
+            DefaultColorSpace::Cmyk => "DefaultCMYK",
+        }
+    }
+}
+
 /// A colour space that is named in the resources of a page.
 #[derive(Debug, Clone, PartialEq, DerivePdfFormat)]
 pub enum ColorSpaceResource {
