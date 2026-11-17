@@ -18,7 +18,7 @@ use std::io::{Result, Write};
 use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 use crate as lemon_pdf;
 
-use crate::color_space::LabColorSpace;
+use crate::color_space::{ColorSpaceResource, LabColorSpace};
 use crate::font::Font;
 use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
 use crate::image::XObject;
@@ -76,7 +76,7 @@ pub struct PageContext<'page, 'context, 'context_borrow> {
     pub(crate) shadings: Vec<(Shading, Name)>,
     pub(crate) patterns: Vec<(Pattern, Name)>,
     /// The named colour spaces.
-    pub(crate) color_spaces: Vec<(LabColorSpace, Name)>,
+    pub(crate) color_spaces: Vec<(ColorSpaceResource, Name)>,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -121,12 +121,38 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     /// Adds a colour space to the resources of the page and returns its resource name. Adding an
     /// equal space again returns the same name.
     pub fn add_lab_color_space(&mut self, space: LabColorSpace) -> Name {
+        self.add_color_space(space)
+    }
+
+    /// Adds a colour space (Lab, CalRGB or one from an ICC profile) to the resources of the page
+    /// and returns its resource name. Adding an equal space again returns the same name.
+    pub fn add_color_space(&mut self, space: impl Into<ColorSpaceResource>) -> Name {
+        let space = space.into();
         if let Some((_, key)) = self.color_spaces.iter().find(|(other, _)| *other == space) {
             return key.clone();
         }
         let key = Name::from(format!("CS{}", self.color_spaces.len()));
         self.color_spaces.push((space, key.clone()));
         key
+    }
+
+    /// Makes fills use a colour of a space from `add_color_space` (`cs` and `sc` operators): the
+    /// `components` are the ones of the space, so three for every space that there is yet.
+    pub fn set_fill_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
+        self.write_operation1(space, "cs")?;
+        for component in components {
+            self.push_operand(*component)?;
+        }
+        self.apply_operator("sc")
+    }
+
+    /// Makes strokes use a colour of a space from `add_color_space` (`CS` and `SC` operators).
+    pub fn set_stroke_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
+        self.write_operation1(space, "CS")?;
+        for component in components {
+            self.push_operand(*component)?;
+        }
+        self.apply_operator("SC")
     }
 
     /// Makes fills use a colour of a Lab space from `add_lab_color_space` (`cs` and `sc`

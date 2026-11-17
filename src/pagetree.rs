@@ -19,7 +19,7 @@ use std::io::Result;
 use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat;
 
-use crate::color_space::LabColorSpace;
+use crate::color_space::ColorSpaceResource;
 use crate::annotation::Annotation;
 use crate::array::Array;
 use crate::content::{ContentStream, PageContext};
@@ -73,7 +73,7 @@ pub struct ResourceDictionary {
     pub pattern: BTreeMap<Name, Pattern>,
     /// The named colour spaces, for the `cs` and `CS` operators.
     #[skip_if("BTreeMap::is_empty")]
-    pub color_space: BTreeMap<Name, LabColorSpace>,
+    pub color_space: BTreeMap<Name, ColorSpaceResource>,
 }
 
 /// A convenience struct to create PDF pages.

@@ -1420,3 +1420,49 @@ fn lab_colors_use_a_named_color_space() {
         assert_eq!(parameters.get(b"Range").unwrap().as_array().unwrap().len(), 4);
     }
 }
+
+#[test]
+fn color_spaces_of_every_kind_are_resources() {
+    use lemon_pdf::color_space::{CalRgbColorSpace, IccBasedColorSpace, LabColorSpace};
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let profile = context.write_icc_profile(lemon_pdf::icc::display_p3_profile(), 3, Some(StreamFilter::Deflate)).unwrap();
+            let mut page = Page::new();
+            page.add_content(context, None, |page| {
+                let lab = page.add_color_space(LabColorSpace::d50());
+                let cal = page.add_color_space(CalRgbColorSpace {
+                    white_point: [0.9505, 1.0, 1.089],
+                    gamma: [2.2, 2.2, 2.2],
+                    matrix: [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505],
+                });
+                let icc = page.add_color_space(IccBasedColorSpace(profile));
+                assert_eq!([lab.clone(), cal.clone(), icc.clone()].len(), 3);
+                assert_ne!(lab, cal);
+                assert_ne!(cal, icc);
+                page.set_fill_color_components(&icc, &[1.0, 0.25, 0.0])?;
+                page.set_stroke_color_components(&cal, &[0.5, 0.5, 0.5])?;
+                Ok(())
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let content = String::from_utf8(document.get_page_content(page)).unwrap();
+        let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(content.contains("/CS2 cs 1 0.25 0 sc"), "{content}");
+        assert!(content.contains("/CS1 CS 0.5 0.5 0.5 SC"), "{content}");
+        let (resources, _) = document.get_page_resources(page).unwrap();
+        let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
+        assert_eq!(spaces.get(b"CS0").unwrap().as_array().unwrap()[0].as_name().unwrap(), b"Lab");
+        let cal = spaces.get(b"CS1").unwrap().as_array().unwrap();
+        assert_eq!(cal[0].as_name().unwrap(), b"CalRGB");
+        assert_eq!(cal[1].as_dict().unwrap().get(b"Matrix").unwrap().as_array().unwrap().len(), 9);
+        let icc = spaces.get(b"CS2").unwrap().as_array().unwrap();
+        assert_eq!(icc[0].as_name().unwrap(), b"ICCBased");
+        let stream = document.dereference(&icc[1]).unwrap().1.as_stream().unwrap();
+        assert_eq!(stream.dict.get(b"N").unwrap().as_i64().unwrap(), 3);
+        let data = stream.decompressed_content().unwrap_or_else(|_| stream.content.clone());
+        assert_eq!(data, lemon_pdf::icc::display_p3_profile());
+    }
+}

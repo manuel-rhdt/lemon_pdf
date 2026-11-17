@@ -468,6 +468,23 @@ impl<'a> DocumentContext<'a> {
         }
     }
 
+    /// Writes an ICC profile as a stream and returns the reference, to make a colour space of it
+    /// (`IccBasedColorSpace`) or an output intent. `components` is the number of colour
+    /// components of the profile (3 for RGB), `filter` compresses it.
+    pub fn write_icc_profile(
+        &mut self,
+        profile: Vec<u8>,
+        components: i64,
+        filter: Option<crate::stream::StreamFilter>,
+    ) -> Result<IndirectReference<Stream<IccProfileDict>>, Error> {
+        let dict = IccProfileDict { n: components };
+        let stream = match filter {
+            Some(_) => Stream::deflated(dict, &profile)?,
+            None => Stream::new(dict, profile),
+        };
+        self.write_object(stream)
+    }
+
     /// Adds an output intent (`/OutputIntents` of the catalog) with an embedded ICC profile.
     /// `filter` compresses the profile.
     pub fn add_output_intent(
@@ -475,12 +492,7 @@ impl<'a> DocumentContext<'a> {
         intent: OutputIntentDesc,
         filter: Option<crate::stream::StreamFilter>,
     ) -> Result<(), Error> {
-        let dict = IccProfileDict { n: intent.components };
-        let profile = match filter {
-            Some(_) => Stream::deflated(dict, &intent.profile)?,
-            None => Stream::new(dict, intent.profile),
-        };
-        let profile = self.write_object(profile)?;
+        let profile = self.write_icc_profile(intent.profile, intent.components, filter)?;
         let output_intent = self.write_object(OutputIntent {
             subtype: intent.subtype,
             output_condition_identifier: TextString(intent.output_condition_identifier),

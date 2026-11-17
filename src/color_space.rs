@@ -3,7 +3,12 @@
 
 use std::io::Result;
 
-use crate::object::{Formatter, Name, PdfFormat};
+use crate as lemon_pdf;
+use lemon_pdf_derive::PdfFormat as DerivePdfFormat;
+
+use crate::object::{Formatter, IndirectReference, Name, PdfFormat};
+use crate::output_intent::IccProfileDict;
+use crate::stream::Stream;
 
 /// The D50 white point of CIELAB (the one that CSS uses for `lab()` and `lch()`).
 pub const D50_WHITE_POINT: [f64; 3] = [0.964_295_676_429_567_7, 1.0, 0.825_104_602_510_460_2];
@@ -49,5 +54,81 @@ impl PdfFormat for LabColorSpace {
             .value(&Name::from("Lab"))
             .value(&Parameters(self))
             .finish()
+    }
+}
+
+/// A calibrated RGB colour space (`[/CalRGB << /WhitePoint … /Gamma … /Matrix … >>]`): CIE XYZ
+/// colours are made from the three components by a power function for each channel and a matrix.
+/// It can only say a curve that is a power function, so a space with another curve (sRGB, which
+/// has a linear segment) is approximated.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CalRgbColorSpace {
+    /// The tristimulus value of the white of the space (CIE XYZ, with Y of 1).
+    pub white_point: [f64; 3],
+    /// The exponent of every channel.
+    pub gamma: [f64; 3],
+    /// The XYZ of the red, green and blue colorants, one after another (`XA YA ZA XB YB ZB XC YC ZC`).
+    pub matrix: [f64; 9],
+}
+
+impl PdfFormat for CalRgbColorSpace {
+    fn write(&self, f: &mut Formatter) -> Result<()> {
+        #[derive(Debug)]
+        struct Parameters<'a>(&'a CalRgbColorSpace);
+
+        impl PdfFormat for Parameters<'_> {
+            fn write(&self, f: &mut Formatter) -> Result<()> {
+                f.format_dictionary()
+                    .key_value("WhitePoint", &self.0.white_point.to_vec())
+                    .key_value("Gamma", &self.0.gamma.to_vec())
+                    .key_value("Matrix", &self.0.matrix.to_vec())
+                    .finish()
+            }
+        }
+
+        f.format_array()
+            .value(&Name::from("CalRGB"))
+            .value(&Parameters(self))
+            .finish()
+    }
+}
+
+/// A colour space that is defined by an ICC profile (`[/ICCBased stream]`), from
+/// `DocumentContext::write_icc_profile`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IccBasedColorSpace(pub IndirectReference<Stream<IccProfileDict>>);
+
+impl PdfFormat for IccBasedColorSpace {
+    fn write(&self, f: &mut Formatter) -> Result<()> {
+        f.format_array()
+            .value(&Name::from("ICCBased"))
+            .value(&self.0)
+            .finish()
+    }
+}
+
+/// A colour space that is named in the resources of a page.
+#[derive(Debug, Clone, PartialEq, DerivePdfFormat)]
+pub enum ColorSpaceResource {
+    Lab(LabColorSpace),
+    CalRgb(CalRgbColorSpace),
+    IccBased(IccBasedColorSpace),
+}
+
+impl From<LabColorSpace> for ColorSpaceResource {
+    fn from(space: LabColorSpace) -> Self {
+        ColorSpaceResource::Lab(space)
+    }
+}
+
+impl From<CalRgbColorSpace> for ColorSpaceResource {
+    fn from(space: CalRgbColorSpace) -> Self {
+        ColorSpaceResource::CalRgb(space)
+    }
+}
+
+impl From<IccBasedColorSpace> for ColorSpaceResource {
+    fn from(space: IccBasedColorSpace) -> Self {
+        ColorSpaceResource::IccBased(space)
     }
 }
