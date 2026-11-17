@@ -32,6 +32,7 @@ use lemon_pdf_derive::PdfFormat;
 
 use crate as lemon_pdf;
 use crate::content::{Matrix, Pt};
+use crate::color_space::IccBasedColorSpace;
 use crate::image::ColorSpace;
 use crate::mesh::MeshShading;
 use crate::object::{IndirectReference, Precise};
@@ -101,6 +102,13 @@ impl Color for Cmyk {
     fn components(&self) -> Vec<f64> {
         vec![self.0, self.1, self.2, self.3]
     }
+}
+
+/// The color space of a shading: a device space, or the one of an ICC profile.
+#[derive(Debug, Copy, Clone, PartialEq, PdfFormat)]
+pub enum ShadingColorSpace {
+    Device(ColorSpace),
+    Icc(IccBasedColorSpace),
 }
 
 /// A function from one input to several outputs (ISO 32000-1, 7.10), which gives the color at a
@@ -292,7 +300,7 @@ pub enum Shading {
 #[omit_type(true)]
 #[constant(ShadingType = 2)]
 pub struct AxialShading {
-    color_space: ColorSpace,
+    color_space: ShadingColorSpace,
     background: Option<Vec<Precise>>,
     #[rename("BBox")]
     bbox: Option<[Pt; 4]>,
@@ -302,12 +310,19 @@ pub struct AxialShading {
 }
 
 impl AxialShading {
+    /// Reads the colors of the gradient (`Rgb` for a profile of an RGB space) in an ICC
+    /// profile (from `DocumentContext::icc_color_space`) and not in the device space.
+    pub fn with_icc_profile(mut self, profile: IccBasedColorSpace) -> Self {
+        self.color_space = ShadingColorSpace::Icc(profile);
+        self
+    }
+
     /// A shading that changes along the line from `from` to `to` in the user space it is
     /// painted in: it has the color of the first stop at the start and the color of the last
     /// stop at the end, and is constant across the line.
     pub fn new<C: Color>(from: Point, to: Point, gradient: &Gradient<C>) -> Self {
         AxialShading {
-            color_space: C::SPACE,
+            color_space: ShadingColorSpace::Device(C::SPACE),
             background: gradient.background.map(|color| precise(color.components())),
             bbox: None,
             coords: [from.x, from.y, to.x, to.y],
@@ -328,7 +343,7 @@ impl AxialShading {
 #[omit_type(true)]
 #[constant(ShadingType = 3)]
 pub struct RadialShading {
-    color_space: ColorSpace,
+    color_space: ShadingColorSpace,
     background: Option<Vec<Precise>>,
     #[rename("BBox")]
     bbox: Option<[Pt; 4]>,
@@ -338,11 +353,18 @@ pub struct RadialShading {
 }
 
 impl RadialShading {
+    /// Reads the colors of the gradient (`Rgb` for a profile of an RGB space) in an ICC
+    /// profile (from `DocumentContext::icc_color_space`) and not in the device space.
+    pub fn with_icc_profile(mut self, profile: IccBasedColorSpace) -> Self {
+        self.color_space = ShadingColorSpace::Icc(profile);
+        self
+    }
+
     /// A shading between two circles: the color of the first stop is at `start`, the one of the
     /// last stop at `end`, and the circles in between are interpolated.
     pub fn new<C: Color>(start: Circle, end: Circle, gradient: &Gradient<C>) -> Self {
         RadialShading {
-            color_space: C::SPACE,
+            color_space: ShadingColorSpace::Device(C::SPACE),
             background: gradient.background.map(|color| precise(color.components())),
             bbox: None,
             coords: [start.x, start.y, start.radius, end.x, end.y, end.radius],
@@ -516,6 +538,27 @@ mod tests {
         assert!(spaces[0].contains("/ColorSpace /DeviceGray"), "{}", spaces[0]);
         assert!(spaces[1].contains("/ColorSpace /DeviceCMYK"), "{}", spaces[1]);
         assert!(spaces[1].contains("/C0 [ 0 0 0 1 ]"), "{}", spaces[1]);
+    }
+
+    #[test]
+    fn a_shading_can_be_in_an_icc_space() {
+        let profile = IccBasedColorSpace(IndirectReference::new(7, 0));
+        let gradient = Gradient::new(&[
+            ColorStop::new(0.0, Rgb(0.2, 0.4, 0.6)),
+            ColorStop::new(1.0, Rgb(0.9, 0.5, 0.1)),
+        ])
+        .unwrap();
+        let axial = written(&AxialShading::new(pt(0.0, 0.0), pt(1.0, 0.0), &gradient).with_icc_profile(profile));
+        assert!(axial.contains("/ColorSpace [ /ICCBased 7 0 R ]"), "{}", axial);
+        let radial = written(
+            &RadialShading::new(
+                Circle { x: Pt(0.0), y: Pt(0.0), radius: Pt(1.0) },
+                Circle { x: Pt(0.0), y: Pt(0.0), radius: Pt(2.0) },
+                &gradient,
+            )
+            .with_icc_profile(profile),
+        );
+        assert!(radial.contains("/ColorSpace [ /ICCBased 7 0 R ]"), "{}", radial);
     }
 
     #[test]
