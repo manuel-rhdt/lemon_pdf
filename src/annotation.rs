@@ -93,7 +93,14 @@ pub struct LinkAnnotation {
     pub contents: Option<TextString>,
     /// The key of the annotation in the parent tree of the structure tree (tagged PDF).
     pub struct_parent: Option<i64>,
+    /// The flags of the annotation (`/F`, ISO 32000-1, 12.5.3). PDF/A wants the key, with the
+    /// print flag set and the hidden, invisible and no-view flags clear: [`ANNOTATION_PRINT`].
+    #[rename("F")]
+    pub flags: i64,
 }
+
+/// The flag of an annotation that it is printed (bit 3 of `/F`).
+pub const ANNOTATION_PRINT: i64 = 1 << 2;
 
 impl LinkAnnotation {
     /// A link without a border.
@@ -104,6 +111,7 @@ impl LinkAnnotation {
             action,
             contents: None,
             struct_parent: None,
+            flags: ANNOTATION_PRINT,
         }
     }
 }

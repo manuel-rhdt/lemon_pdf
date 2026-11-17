@@ -1331,3 +1331,58 @@ fn viewer_preferences_are_written_entry_by_entry() {
         assert!(preferences.get(b"DisplayDocTitle").is_err());
     }
 }
+
+#[test]
+fn output_intents_embed_their_profile() {
+    use lemon_pdf::output_intent::{OutputIntentDesc, OutputIntentSubtype};
+
+    for &mode in &MODES {
+        for &filter in &[None, Some(StreamFilter::Deflate)] {
+            let (_, document) = build_and_load(mode, |context| {
+                context
+                    .add_output_intent(
+                        OutputIntentDesc {
+                            subtype: OutputIntentSubtype::PdfA,
+                            output_condition_identifier: "sRGB IEC61966-2.1".to_owned(),
+                            info: Some("sRGB".to_owned()),
+                            profile: lemon_pdf::icc::srgb_profile(),
+                            components: 3,
+                        },
+                        filter,
+                    )
+                    .unwrap();
+            });
+            let intents = document.catalog().unwrap().get(b"OutputIntents").unwrap();
+            let intents = document.dereference(intents).unwrap().1.as_array().unwrap();
+            assert_eq!(intents.len(), 1);
+            let intent = document.dereference(&intents[0]).unwrap().1.as_dict().unwrap();
+            assert_eq!(intent.get(b"S").unwrap().as_name().unwrap(), b"GTS_PDFA1");
+            assert_eq!(intent.get(b"Type").unwrap().as_name().unwrap(), b"OutputIntent");
+            let profile = document.dereference(intent.get(b"DestOutputProfile").unwrap()).unwrap().1;
+            let profile = profile.as_stream().unwrap();
+            assert_eq!(profile.dict.get(b"N").unwrap().as_i64().unwrap(), 3);
+            let content = profile.decompressed_content().unwrap_or_else(|_| profile.content.clone());
+            assert_eq!(content, lemon_pdf::icc::srgb_profile());
+        }
+    }
+}
+
+#[test]
+fn link_annotations_are_printed() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            let link = LinkAnnotation::new(
+                [Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0)],
+                LinkAction::Uri(UriAction { uri: ByteString::from("https://example.com") }),
+            );
+            page.add_annotation(context, Annotation::Link(link)).unwrap();
+            context.add_page(page).unwrap();
+        });
+        let page = document.get_pages().values().next().copied().unwrap();
+        let annotations = document.get_page_annotations(page).unwrap();
+        assert_eq!(annotations.len(), 1);
+        // the print flag, and none of the flags that PDF/A forbids
+        assert_eq!(annotations[0].get(b"F").unwrap().as_i64().unwrap(), 4);
+    }
+}

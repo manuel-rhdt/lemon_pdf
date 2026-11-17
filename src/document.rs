@@ -24,6 +24,7 @@ use crate::object::{Formatter, IndirectObject, IndirectReference, RawIndirectRef
 use crate::names::{DestinationTree, Names};
 use crate::page_labels::{PageLabel, PageLabelStyle};
 use crate::viewer_preferences::ViewerPreferences;
+use crate::output_intent::{IccProfileDict, OutputIntent, OutputIntentDesc};
 use crate::outline::{OutlineEntry, OutlineItem, Outlines};
 use crate::pagetree::{Page, Pages};
 use crate::stream::Stream;
@@ -118,6 +119,8 @@ pub(crate) struct DocumentCatalog {
     page_mode: Option<PageMode>,
     names: Option<Names>,
     page_labels: Option<NumberTree<PageLabel>>,
+    #[skip_if("Vec::is_empty")]
+    output_intents: Vec<IndirectReference<OutputIntent>>,
 }
 
 /// How a viewer shows the document when it is opened (`/PageMode` of the catalog, ISO 32000-1,
@@ -224,6 +227,7 @@ impl<'a> DocumentContext<'a> {
             page_mode: None,
             names: None,
             page_labels: None,
+            output_intents: Vec::new(),
         });
         context.start_pdf()?;
         Ok(context)
@@ -462,6 +466,32 @@ impl<'a> DocumentContext<'a> {
                 dests: Some(DestinationTree { names }),
             });
         }
+    }
+
+    /// Adds an output intent (`/OutputIntents` of the catalog) with an embedded ICC profile.
+    /// `filter` compresses the profile.
+    pub fn add_output_intent(
+        &mut self,
+        intent: OutputIntentDesc,
+        filter: Option<crate::stream::StreamFilter>,
+    ) -> Result<(), Error> {
+        let dict = IccProfileDict { n: intent.components };
+        let profile = match filter {
+            Some(_) => Stream::deflated(dict, &intent.profile)?,
+            None => Stream::new(dict, intent.profile),
+        };
+        let profile = self.write_object(profile)?;
+        let output_intent = self.write_object(OutputIntent {
+            subtype: intent.subtype,
+            output_condition_identifier: TextString(intent.output_condition_identifier),
+            registry_name: None,
+            info: intent.info.map(TextString),
+            dest_output_profile: Some(profile),
+        })?;
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.output_intents.push(output_intent);
+        }
+        Ok(())
     }
 
     /// Sets how viewers show the document when it is opened (`/PageMode`), for example with the
