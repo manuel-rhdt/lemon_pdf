@@ -1177,3 +1177,41 @@ fn png_pixel_data_is_embedded_unchanged() {
         assert!(png[idat_start..].starts_with(&image.content));
     }
 }
+
+#[test]
+fn outline_is_a_linked_tree() {
+    use lemon_pdf::annotation::Destination;
+    use lemon_pdf::outline::OutlineItem;
+
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let pages: Vec<_> = (0..2).map(|_| context.create_reference()).collect();
+            let dest = |page: usize| Destination { page: pages[page], point: (Pt(0.0), Pt(700.0)) };
+            let mut chapter = OutlineItem::new("Chapter ä", dest(0));
+            chapter.children = vec![OutlineItem::new("Section 1", dest(0)), OutlineItem::new("Section 2", dest(1))];
+            let mut closed = OutlineItem::new("Appendix", dest(1));
+            closed.open = false;
+            closed.children = vec![OutlineItem::new("A", dest(1))];
+            context.set_outlines(&[chapter, closed]).unwrap();
+            for (i, reference) in pages.into_iter().enumerate() {
+                let mut page = Page::new();
+                page.set_media_box(lemon_pdf::pagetree::MediaBox::new(Pt(0.0), Pt(0.0), Pt(595.0), Pt(842.0)));
+                let _ = i;
+                context.add_reserved_page(reference, page).unwrap();
+            }
+        });
+        let root = document.catalog().unwrap().get(b"Outlines").unwrap();
+        let root = document.get_dictionary(root.as_reference().unwrap()).unwrap();
+        // chapter, 2 sections, appendix (closed: its child is hidden)
+        assert_eq!(root.get(b"Count").unwrap().as_i64().unwrap(), 4);
+        let first = document.get_dictionary(root.get(b"First").unwrap().as_reference().unwrap()).unwrap();
+        assert_eq!(first.get(b"Count").unwrap().as_i64().unwrap(), 2);
+        assert_eq!(first.get(b"Dest").unwrap().as_array().unwrap().len(), 5);
+        let next = document.get_dictionary(first.get(b"Next").unwrap().as_reference().unwrap()).unwrap();
+        assert_eq!(next.get(b"Count").unwrap().as_i64().unwrap(), -1);
+        assert_eq!(root.get(b"Last").unwrap(), &Object::Reference(first.get(b"Next").unwrap().as_reference().unwrap()));
+        let section = document.get_dictionary(first.get(b"First").unwrap().as_reference().unwrap()).unwrap();
+        assert!(section.get(b"Prev").is_err());
+        assert!(section.get(b"Next").is_ok());
+    }
+}
