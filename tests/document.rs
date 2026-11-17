@@ -1482,3 +1482,24 @@ fn the_rendering_intent_is_an_operator() {
         assert!(content.split_whitespace().collect::<Vec<_>>().join(" ").contains("/Perceptual ri"), "{content}");
     }
 }
+
+#[test]
+fn an_icc_profile_is_written_once_for_all_pages() {
+    for &mode in &MODES {
+        let (bytes, document) = build_and_load(mode, |context| {
+            for _ in 0..3 {
+                let space = context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
+                let mut page = Page::new();
+                page.add_content(context, None, |page| {
+                    let name = page.add_color_space(space);
+                    page.set_fill_color_components(&name, &[1.0, 0.0, 0.0])
+                })
+                .unwrap();
+                context.add_page(page).unwrap();
+            }
+        });
+        assert_eq!(document.get_pages().len(), 3);
+        // one profile (its ICC signature is in the file once: the stream is not compressed)
+        assert_eq!(bytes.windows(4).filter(|window| *window == b"acsp").count(), 1, "mode object_streams={mode}");
+    }
+}
