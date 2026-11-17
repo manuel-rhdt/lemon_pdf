@@ -1215,3 +1215,15 @@ fn outline_is_a_linked_tree() {
         assert!(section.get(b"Next").is_ok());
     }
 }
+
+#[test]
+fn page_mode_is_written_to_the_catalog() {
+    use lemon_pdf::PageMode;
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| context.set_page_mode(PageMode::UseOutlines));
+        let page_mode = document.catalog().unwrap().get(b"PageMode").unwrap();
+        assert_eq!(page_mode.as_name().unwrap(), b"UseOutlines");
+        let (_, document) = build_and_load(mode, |context| context.set_page_mode(PageMode::UseOc));
+        assert_eq!(document.catalog().unwrap().get(b"PageMode").unwrap().as_name().unwrap(), b"UseOC");
+    }
+}

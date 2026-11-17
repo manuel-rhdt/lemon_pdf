@@ -112,6 +112,26 @@ pub(crate) struct DocumentCatalog {
     viewer_preferences: Option<ViewerPreferences>,
     metadata: Option<IndirectReference<Stream<MetadataDict>>>,
     outlines: Option<IndirectReference<Outlines>>,
+    page_mode: Option<PageMode>,
+}
+
+/// How a viewer shows the document when it is opened (`/PageMode` of the catalog, ISO 32000-1,
+/// 7.7.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PdfFormat)]
+pub enum PageMode {
+    /// Neither the outline nor the thumbnails are shown (the default of viewers).
+    UseNone,
+    /// The outline (bookmarks) panel is open.
+    UseOutlines,
+    /// The panel of page thumbnails is open.
+    UseThumbs,
+    /// Full-screen mode.
+    FullScreen,
+    /// The panel of optional content groups (layers) is open.
+    #[rename("UseOC")]
+    UseOc,
+    /// The panel of attachments is open.
+    UseAttachments,
 }
 
 /// The dictionary of a metadata stream (ISO 32000-1, 14.3.2), whose data is an XMP packet.
@@ -203,6 +223,7 @@ impl<'a> DocumentContext<'a> {
             viewer_preferences: None,
             metadata: None,
             outlines: None,
+            page_mode: None,
         });
         context.start_pdf()?;
         Ok(context)
@@ -422,6 +443,14 @@ impl<'a> DocumentContext<'a> {
             self.write_reserved_object(references[index], entry)?;
         }
         Ok((references.first().copied(), references.last().copied(), visible))
+    }
+
+    /// Sets how viewers show the document when it is opened (`/PageMode`), for example with the
+    /// outline panel open (`PageMode::UseOutlines`).
+    pub fn set_page_mode(&mut self, mode: PageMode) {
+        if let Some(catalog) = self.document_catalog.as_mut() {
+            catalog.page_mode = Some(mode);
+        }
     }
 
     /// Makes viewers show the `Title` of the document information instead of the file name.
