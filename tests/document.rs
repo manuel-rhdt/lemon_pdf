@@ -1489,7 +1489,8 @@ fn lab_colors_use_a_named_color_space() {
 
 #[test]
 fn color_spaces_of_every_kind_are_resources() {
-    use lemon_pdf::color_space::{CalRgbColorSpace, IccBasedColorSpace, LabColorSpace};
+    use lemon_pdf::color_space::{CalRgbColorSpace, CalRgbDict, IccBasedColorSpace, LabColorSpace};
+    use lemon_pdf::object::Precise;
 
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
@@ -1497,11 +1498,15 @@ fn color_spaces_of_every_kind_are_resources() {
             let mut page = Page::new();
             page.add_content(context, None, |page| {
                 let lab = page.add_color_space(LabColorSpace::d50());
-                let cal = page.add_color_space(CalRgbColorSpace {
-                    white_point: [0.9505, 1.0, 1.089],
-                    gamma: [2.2, 2.2, 2.2],
-                    matrix: [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505],
-                });
+                let cal = page.add_color_space(CalRgbColorSpace(CalRgbDict {
+                    white_point: [0.9505, 1.0, 1.089].map(Precise),
+                    black_point: None,
+                    gamma: Some([2.2, 2.2, 2.2].map(Precise)),
+                    matrix: Some(
+                        [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505]
+                            .map(Precise),
+                    ),
+                }));
                 let icc = page.add_color_space(IccBasedColorSpace(profile));
                 assert_eq!([lab.clone(), cal.clone(), icc.clone()].len(), 3);
                 assert_ne!(lab, cal);
@@ -1572,7 +1577,8 @@ fn an_icc_profile_is_written_once_for_all_pages() {
 
 #[test]
 fn colors_are_written_with_more_than_two_decimals() {
-    use lemon_pdf::color_space::CalRgbColorSpace;
+    use lemon_pdf::color_space::{CalRgbColorSpace, CalRgbDict};
+    use lemon_pdf::object::Precise;
 
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
@@ -1581,11 +1587,15 @@ fn colors_are_written_with_more_than_two_decimals() {
                 // 187 / 255 would be 0.73 with two decimals, which is a different byte
                 page.device_rgb_fill_color(187.0 / 255.0, 0.2, 1.0)?;
                 page.device_gray_stroke_color(1.0 / 3.0)?;
-                let space = page.add_color_space(CalRgbColorSpace {
-                    white_point: [0.950_455_927, 1.0, 1.089_057_751],
-                    gamma: [1.0; 3],
-                    matrix: [0.486_570_949, 0.228_974_564, 0.0, 0.265_667_693, 0.691_738_522, 0.045_113_382, 0.198_217_285, 0.079_286_914, 1.043_944_369],
-                });
+                let space = page.add_color_space(CalRgbColorSpace(CalRgbDict {
+                    white_point: [0.950_455_927, 1.0, 1.089_057_751].map(Precise),
+                    black_point: None,
+                    gamma: Some([1.0; 3].map(Precise)),
+                    matrix: Some(
+                        [0.486_570_949, 0.228_974_564, 0.0, 0.265_667_693, 0.691_738_522, 0.045_113_382, 0.198_217_285, 0.079_286_914, 1.043_944_369]
+                            .map(Precise),
+                    ),
+                }));
                 page.set_fill_color_components(&space, &[0.123_456_789, 0.5, 0.000_001_4])
             })
             .unwrap();
@@ -1608,14 +1618,15 @@ fn colors_are_written_with_more_than_two_decimals() {
 #[test]
 fn the_defaults_of_the_colour_spaces_are_the_ones_that_were_measured() {
     use lemon_pdf::color_space::{CalRgbColorSpace, LabColorSpace, D50_WHITE_POINT};
+    use lemon_pdf::object::Precise;
 
     // Lab: +-128 is right on an iPhone, +-256 shows a* and b* at half
-    assert_eq!(LabColorSpace::d50().range, [-128.0, 128.0, -128.0, 128.0]);
+    assert_eq!(LabColorSpace::d50().0.range, Some([-128.0, 128.0, -128.0, 128.0].map(Precise)));
     // the XYZ carrier: the components (1, 1, 1) are the white point, whatever the white point is
     for white in [D50_WHITE_POINT, [0.950_456, 1.0, 1.089_058]] {
         let space = CalRgbColorSpace::xyz_carrier(white);
-        let m = space.matrix;
-        assert_eq!(space.gamma, [1.0; 3]);
+        let m = space.0.matrix.unwrap().map(|value| value.0);
+        assert_eq!(space.0.gamma, Some([1.0; 3].map(Precise)));
         // the columns of the matrix add up to the white point
         assert_eq!([m[0] + m[3] + m[6], m[1] + m[4] + m[7], m[2] + m[5] + m[8]], white);
     }

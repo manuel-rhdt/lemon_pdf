@@ -1,33 +1,36 @@
 //! CIE-based colour spaces (ISO 32000-1, 8.6.5) that are named in the resources of a page: colours
 //! that mean the same on every device, whatever the gamut of the device is.
 
-use std::io::Result;
-
 use crate as lemon_pdf;
 use lemon_pdf_derive::PdfFormat as DerivePdfFormat;
 
-use crate::object::{Formatter, IndirectReference, Name, PdfFormat, Precise};
-
-fn precise(values: &[f64]) -> Vec<Precise> {
-    values.iter().map(|value| Precise(*value)).collect()
-}
+use crate::object::{IndirectReference, Precise};
 use crate::output_intent::IccProfileDict;
 use crate::stream::Stream;
 
 /// The D50 white point of CIELAB (the one that CSS uses for `lab()` and `lch()`).
 pub const D50_WHITE_POINT: [f64; 3] = [0.964_295_676_429_567_7, 1.0, 0.825_104_602_510_460_2];
 
-/// A CIELAB colour space (`[/Lab << /WhitePoint … /Range … >>]`). Its colours have three
-/// components: L* from 0 to 100, and a* and b* in `range`. Every colour that can be seen has a
-/// value in it, so nothing is lost to a gamut.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LabColorSpace {
-    /// The tristimulus value of the white of the space (CIE XYZ, with Y of 1).
-    pub white_point: [f64; 3],
-    /// The range of a* and b*: `[a_min, a_max, b_min, b_max]`. Colours outside of it are clamped
-    /// by readers.
-    pub range: [f64; 4],
+/// The parameter dictionary of a CIELAB colour space (ISO 32000-1, Table 64).
+#[derive(Debug, Clone, PartialEq, DerivePdfFormat)]
+#[omit_type(true)]
+pub struct LabDict {
+    /// The tristimulus value of the diffuse white point (CIE XYZ, with Y of 1). Required.
+    pub white_point: [Precise; 3],
+    /// The tristimulus value of the diffuse black point. The default is `[0 0 0]`.
+    pub black_point: Option<[Precise; 3]>,
+    /// The range of a* and b*: `[a_min, a_max, b_min, b_max]`; colours outside of it are clamped
+    /// by readers. The default is `[-100 100 -100 100]`.
+    pub range: Option<[Precise; 4]>,
 }
+
+/// A CIELAB colour space (`[/Lab dict]`, ISO 32000-1, 8.6.5.4). Its colours have three
+/// components: L* from 0 to 100, and a* and b* in the `range` of the dictionary. Every colour
+/// that can be seen has a value in it, so nothing is lost to a gamut.
+#[derive(Debug, Clone, PartialEq, DerivePdfFormat)]
+#[array]
+#[rename("Lab")]
+pub struct LabColorSpace(pub LabDict);
 
 impl LabColorSpace {
     /// CIELAB relative to the D50 white, with the range of a* and b* of -128 to 128.
@@ -40,47 +43,37 @@ impl LabColorSpace {
     /// that the space has, and a* and b* beyond ±128 cannot be shown on that device by Lab at all:
     /// use another encoding for them (a `CalRGB` carrier, [`CalRgbColorSpace::xyz_carrier`]).
     pub fn d50() -> Self {
-        LabColorSpace {
-            white_point: D50_WHITE_POINT,
-            range: [-128.0, 128.0, -128.0, 128.0],
-        }
+        LabColorSpace(LabDict {
+            white_point: D50_WHITE_POINT.map(Precise),
+            black_point: None,
+            range: Some([-128.0, 128.0, -128.0, 128.0].map(Precise)),
+        })
     }
 }
 
-impl PdfFormat for LabColorSpace {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        #[derive(Debug)]
-        struct Parameters<'a>(&'a LabColorSpace);
-
-        impl PdfFormat for Parameters<'_> {
-            fn write(&self, f: &mut Formatter) -> Result<()> {
-                f.format_dictionary()
-                    .key_value("WhitePoint", &precise(&self.0.white_point))
-                    .key_value("Range", &precise(&self.0.range))
-                    .finish()
-            }
-        }
-
-        f.format_array()
-            .value(&Name::from("Lab"))
-            .value(&Parameters(self))
-            .finish()
-    }
+/// The parameter dictionary of a calibrated RGB colour space (ISO 32000-1, Table 63).
+#[derive(Debug, Clone, PartialEq, DerivePdfFormat)]
+#[omit_type(true)]
+pub struct CalRgbDict {
+    /// The tristimulus value of the diffuse white point (CIE XYZ, with Y of 1). Required.
+    pub white_point: [Precise; 3],
+    /// The tristimulus value of the diffuse black point. The default is `[0 0 0]`.
+    pub black_point: Option<[Precise; 3]>,
+    /// The exponent of the power function of every channel. The default is `[1 1 1]`.
+    pub gamma: Option<[Precise; 3]>,
+    /// The XYZ of the red, green and blue colorants, one after another (`XA YA ZA XB YB ZB XC YC
+    /// ZC`). The default is the identity.
+    pub matrix: Option<[Precise; 9]>,
 }
 
-/// A calibrated RGB colour space (`[/CalRGB << /WhitePoint … /Gamma … /Matrix … >>]`): CIE XYZ
-/// colours are made from the three components by a power function for each channel and a matrix.
-/// It can only say a curve that is a power function, so a space with another curve (sRGB, which
-/// has a linear segment) is approximated.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CalRgbColorSpace {
-    /// The tristimulus value of the white of the space (CIE XYZ, with Y of 1).
-    pub white_point: [f64; 3],
-    /// The exponent of every channel.
-    pub gamma: [f64; 3],
-    /// The XYZ of the red, green and blue colorants, one after another (`XA YA ZA XB YB ZB XC YC ZC`).
-    pub matrix: [f64; 9],
-}
+/// A calibrated RGB colour space (`[/CalRGB dict]`, ISO 32000-1, 8.6.5.3): CIE XYZ colours are
+/// made from the three components by a power function for each channel and a matrix. It can only
+/// say a curve that is a power function, so a space with another curve (sRGB, which has a linear
+/// segment) is approximated.
+#[derive(Debug, Clone, PartialEq, DerivePdfFormat)]
+#[array]
+#[rename("CalRGB")]
+pub struct CalRgbColorSpace(pub CalRgbDict);
 
 impl CalRgbColorSpace {
     /// A space with gamma 1 whose three components are the CIE XYZ of the colour divided by the white
@@ -98,49 +91,22 @@ impl CalRgbColorSpace {
     /// are exact and the hues lose about 1.3 of chroma (0.9): the device seems to adapt the colorants
     /// of a D65 space with another transform than Bradford, which a D50 space does not need.
     pub fn xyz_carrier(white_point: [f64; 3]) -> Self {
-        CalRgbColorSpace {
-            white_point,
-            gamma: [1.0; 3],
-            matrix: [white_point[0], 0.0, 0.0, 0.0, white_point[1], 0.0, 0.0, 0.0, white_point[2]],
-        }
+        let [x, y, z] = white_point;
+        CalRgbColorSpace(CalRgbDict {
+            white_point: white_point.map(Precise),
+            black_point: None,
+            gamma: Some([1.0; 3].map(Precise)),
+            matrix: Some([x, 0.0, 0.0, 0.0, y, 0.0, 0.0, 0.0, z].map(Precise)),
+        })
     }
 }
 
-impl PdfFormat for CalRgbColorSpace {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        #[derive(Debug)]
-        struct Parameters<'a>(&'a CalRgbColorSpace);
-
-        impl PdfFormat for Parameters<'_> {
-            fn write(&self, f: &mut Formatter) -> Result<()> {
-                f.format_dictionary()
-                    .key_value("WhitePoint", &precise(&self.0.white_point))
-                    .key_value("Gamma", &precise(&self.0.gamma))
-                    .key_value("Matrix", &precise(&self.0.matrix))
-                    .finish()
-            }
-        }
-
-        f.format_array()
-            .value(&Name::from("CalRGB"))
-            .value(&Parameters(self))
-            .finish()
-    }
-}
-
-/// A colour space that is defined by an ICC profile (`[/ICCBased stream]`), from
-/// `DocumentContext::write_icc_profile`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A colour space that is defined by an ICC profile (`[/ICCBased stream]`, ISO 32000-1, 8.6.5.5),
+/// from `DocumentContext::write_icc_profile`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DerivePdfFormat)]
+#[array]
+#[rename("ICCBased")]
 pub struct IccBasedColorSpace(pub IndirectReference<Stream<IccProfileDict>>);
-
-impl PdfFormat for IccBasedColorSpace {
-    fn write(&self, f: &mut Formatter) -> Result<()> {
-        f.format_array()
-            .value(&Name::from("ICCBased"))
-            .value(&self.0)
-            .finish()
-    }
-}
 
 /// The device colour spaces that a page can redefine (`DefaultGray`, `DefaultRGB`, `DefaultCMYK`,
 /// ISO 32000-1, 8.6.5.6): every device colour of the page is then read in the space that was set.
@@ -184,5 +150,34 @@ impl From<CalRgbColorSpace> for ColorSpaceResource {
 impl From<IccBasedColorSpace> for ColorSpaceResource {
     fn from(space: IccBasedColorSpace) -> Self {
         ColorSpaceResource::IccBased(space)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::object::{Formatter, PdfFormat};
+
+    fn written(value: &impl PdfFormat) -> String {
+        let mut buffer = Vec::new();
+        value.write(&mut Formatter { writer: &mut buffer }).unwrap();
+        String::from_utf8(buffer).unwrap().split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn a_colour_space_is_an_array_of_its_family_and_its_dictionary() {
+        assert_eq!(
+            written(&LabColorSpace::d50()),
+            "[ /Lab << /WhitePoint [ 0.964296 1 0.825105 ] /Range [ -128 128 -128 128 ] >> ]"
+        );
+        let cal = CalRgbColorSpace(CalRgbDict {
+            white_point: [0.5, 1.0, 0.25].map(Precise),
+            black_point: None,
+            gamma: None,
+            matrix: None,
+        });
+        assert_eq!(written(&cal), "[ /CalRGB << /WhitePoint [ 0.5 1 0.25 ] >> ]");
+        let icc = IccBasedColorSpace(IndirectReference::new(7, 0));
+        assert_eq!(written(&icc), "[ /ICCBased 7 0 R ]");
     }
 }

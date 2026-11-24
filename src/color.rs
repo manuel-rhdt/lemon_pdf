@@ -156,6 +156,9 @@ pub fn xyz_d65_to_lab_d50(xyz: [f64; 3]) -> [f64; 3] {
     [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
 
+/// The largest a* and b* of [`LabColorSpace::d50`].
+const LAB_LIMIT: f64 = 128.0;
+
 /// Rounds the components that go to the content stream to five decimals.
 fn round5(components: [f64; 3]) -> [f64; 3] {
     components.map(|value| (value * 100_000.0).round() / 100_000.0)
@@ -215,7 +218,7 @@ impl PageContext<'_, '_, '_> {
         };
         let round = |value: f64| (value * 10_000.0).round() / 10_000.0;
         let lab = LabColorSpace::d50();
-        let limit = lab.range[1];
+        let limit = LAB_LIMIT;
         let [lightness, mut a, mut b] = xyz_d65_to_lab_d50(xyz);
         if a.abs() > limit || b.abs() > limit {
             // A device may show a* and b* only within ±128, so a colour beyond is in the ICC space
