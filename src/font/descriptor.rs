@@ -83,6 +83,10 @@ pub struct FontDescriptor {
     pub font_file2: Option<IndirectReference<TrueTypeFontFile>>,
     pub font_file3: Option<IndirectReference<FontFile3>>,
     pub char_set: Option<ByteString>,
+    /// Which CIDs of a CIDFont subset the font program has (`CIDSet`, ISO 32000-1, 9.8.3.2): PDF/A-1
+    /// (ISO 19005-1, 6.3.5) wants it for every CIDFont subset. See [`cid_set`].
+    #[rename("CIDSet")]
+    pub cid_set: Option<IndirectReference<CidSet>>,
 }
 
 impl FontDescriptor {
@@ -110,8 +114,31 @@ impl FontDescriptor {
             font_file2: None,
             font_file3: None,
             char_set: None,
+            cid_set: None,
         }
     }
+}
+
+/// The dictionary of a `CIDSet` stream, which has no entries of its own.
+#[derive(Debug, Clone, PartialEq, PdfDictionary)]
+#[omit_type(true)]
+pub struct CidSetDict {}
+
+/// The stream of a `CIDSet`: a bit for every CID, the most significant bit of the first byte for CID 0,
+/// that is set for the CIDs that the font program has.
+pub type CidSet = Stream<CidSetDict>;
+
+/// The bytes of a `CIDSet` (see [`CidSet`]) for the CIDs given.
+pub fn cid_set(cids: impl IntoIterator<Item = u16>) -> Vec<u8> {
+    let mut bytes: Vec<u8> = Vec::new();
+    for cid in cids {
+        let byte = usize::from(cid) / 8;
+        if bytes.len() <= byte {
+            bytes.resize(byte + 1, 0);
+        }
+        bytes[byte] |= 0x80 >> (cid % 8);
+    }
+    bytes
 }
 
 /// The dictionary of an embedded Type 1 font program (`FontFile`, ISO 32000-1, 9.9).
@@ -157,3 +184,27 @@ pub struct FontFile3Dict {
 }
 
 pub type FontFile3 = Stream<FontFile3Dict>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_cid_is_the_most_significant_bit_of_the_first_byte() {
+        assert_eq!(cid_set([0, 1, 9]), vec![0b1100_0000, 0b0100_0000]);
+        assert!(cid_set([]).is_empty());
+    }
+
+    #[test]
+    fn a_descriptor_names_its_cid_set() {
+        let mut text = Vec::new();
+        let mut descriptor = FontDescriptor::new(Name::from("ABCDEF+Test"));
+        descriptor.cid_set = Some(IndirectReference::new(7, 0));
+        descriptor.write(&mut crate::object::Formatter { writer: &mut text }).unwrap();
+        let text = String::from_utf8(text).unwrap();
+        assert!(text.contains("/CIDSet 7 0 R"), "{}", text);
+        let mut plain = Vec::new();
+        FontDescriptor::new(Name::from("ABCDEF+Test")).write(&mut crate::object::Formatter { writer: &mut plain }).unwrap();
+        assert!(!String::from_utf8(plain).unwrap().contains("CIDSet"));
+    }
+}
