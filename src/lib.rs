@@ -18,7 +18,6 @@ extern crate derive_more;
 
 pub mod annotation;
 pub mod array;
-pub mod color;
 pub mod color_space;
 pub mod content;
 mod crossref;
@@ -27,6 +26,7 @@ mod document;
 pub mod font;
 pub mod form;
 pub mod pattern;
+pub mod resources;
 pub mod graphics_state;
 pub mod icc;
 pub mod image;

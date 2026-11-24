@@ -24,6 +24,7 @@ use lemon_pdf::graphics_state::{ExtGState, SoftMask};
 use lemon_pdf::image::ColorSpace;
 use lemon_pdf::pagetree::{MediaBox, Page};
 use lemon_pdf::shading::{AxialShading, ColorStop, Gradient, Gray, Point, Rgb};
+use lemon_pdf::content::ColorOperand;
 use lemon_pdf::{DocumentContext, Pt, Version};
 
 
@@ -40,8 +41,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some(TransparencyGroup::new(ColorSpace::DeviceGray)),
         None,
         |c| {
-            let shading = c.add_shading(mask_shading);
-            c.paint_shading(&shading)
+            let shading = c.resources.add_shading(mask_shading);
+            c.content.paint_shading(&shading)
         },
     )?;
 
@@ -59,19 +60,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     page.set_media_box(MediaBox::new(Pt(0.0), Pt(0.0), Pt(400.0), Pt(300.0)));
     page.add_content(&mut context, None, |c| {
         // stripes behind show that the mask makes the gradient transparent
-        c.device_gray_fill_color(0.85)?;
+        c.content.set_fill_color(ColorOperand::Gray(0.85))?;
         for i in 0..10 {
-            c.rect(Pt(0.0), Pt(30.0 * f64::from(i) + 10.0), Pt(400.0), Pt(10.0))?;
-            c.fill_path()?;
+            c.content.rect(Pt(0.0), Pt(30.0 * f64::from(i) + 10.0), Pt(400.0), Pt(10.0))?;
+            c.content.fill_path()?;
         }
-        c.save_graphics_state()?;
+        c.content.save_graphics_state()?;
         c.apply_ext_gstate(ExtGState::new().with_soft_mask(SoftMask::luminosity(mask)))?;
-        c.rect(Pt(50.0), Pt(50.0), Pt(300.0), Pt(200.0))?;
-        c.clip(lemon_pdf::graphics_state::FillRule::NonZero)?;
-        c.end_path()?;
-        let shading = c.add_shading(rainbow);
-        c.paint_shading(&shading)?;
-        c.restore_graphics_state()
+        c.content.rect(Pt(50.0), Pt(50.0), Pt(300.0), Pt(200.0))?;
+        c.content.clip(lemon_pdf::graphics_state::FillRule::NonZero)?;
+        c.content.end_path()?;
+        let shading = c.resources.add_shading(rainbow);
+        c.content.paint_shading(&shading)?;
+        c.content.restore_graphics_state()
     })?;
     context.add_page(page)?;
     context.finish()?;

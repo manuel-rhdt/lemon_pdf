@@ -12,25 +12,19 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::{BTreeMap, HashMap};
 use std::io::{Result, Write};
 
 use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 use crate as lemon_pdf;
 
-use crate::color_space::ColorSpaceResource;
-use crate::font::Font;
-use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
-use crate::image::XObject;
+use crate::graphics_state::{FillRule, LineCap, LineJoin, RenderingIntent};
 use crate::object::Precise;
-use crate::object::{
-    write_literal_string, Formatter, IndirectReference, Name, PdfFormat, WriteEscaped,
-};
+use crate::object::{write_literal_string, Formatter, IndirectReference, Name, PdfFormat, WriteEscaped};
 use crate::form::{FormDict, FormXObject, TransparencyGroup};
-use crate::pagetree::{Page, ResourceDictionary};
+use crate::pagetree::Page;
+use crate::pattern::{TilingPattern, TilingPatternDict};
+use crate::resources::{ColorSpaceKey, ExtGStateKey, FontKey, PatternKey, Resources, ShadingKey, XObjectKey};
 use crate::stream::StreamFilter;
-use crate::pattern::{Pattern, TilingPattern, TilingPatternDict};
-use crate::shading::{Shading, ShadingPattern};
 use crate::stream::{Stream, StreamEncoder};
 use crate::DocumentContext;
 
@@ -66,586 +60,330 @@ pub struct ContentStreamDict {}
 /// A content stream (ISO 32000-1, 7.8.2): the operators that paint a page.
 pub type ContentStream = Stream<ContentStreamDict>;
 
-/// The constant opacity (`ca` and `CA`) that is in effect in the content stream being written,
-/// as far as it is known. It follows `q` and `Q`, which save and restore the opacity.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Opacity {
-    /// `None` after something that changes the opacity in a way that is not followed.
-    fill: Option<f64>,
-    stroke: Option<f64>,
-    saved: Vec<(Option<f64>, Option<f64>)>,
+/// The operands of the colour operators (ISO 32000-1, 8.6.8): the colour that fills or strokes
+/// use, in the space that its variant says. The components have six decimals, because two
+/// would be steps of more than 8 bits.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ColorOperand<'a> {
+    /// A device gray (`g` and `G` operators).
+    Gray(f64),
+    /// A device RGB colour (`rg` and `RG`).
+    Rgb(f64, f64, f64),
+    /// A device CMYK colour (`k` and `K`).
+    Cmyk(f64, f64, f64, f64),
+    /// The components of a colour in a space of the resources (`cs` and `sc`, or `CS` and `SC`):
+    /// three for Lab, CalRGB and an ICC profile of RGB.
+    Space(&'a ColorSpaceKey, &'a [f64]),
+    /// A pattern of the resources (`/Pattern cs` and `scn`, or `/Pattern CS` and `SCN`).
+    Pattern(&'a PatternKey),
 }
 
-impl Default for Opacity {
-    /// A content stream starts out opaque.
-    fn default() -> Self {
-        Opacity { fill: Some(1.0), stroke: Some(1.0), saved: Vec::new() }
-    }
-}
-
+/// Writes the operators of a content stream (ISO 32000-1, 8.2 to 9.4), one method for each, in
+/// the order that the caller calls them. It does not check that they make a valid content stream:
+/// that graphics states are nested, text is between `begin_text` and `end_text`, and so on.
+///
+/// Methods that name a resource take its key from [`Resources`].
 #[derive(Debug)]
-pub struct PageContext<'page, 'context, 'context_borrow> {
-    pub(crate) fonts: HashMap<IndirectReference<Font>, Name>,
-    pub(crate) x_objects: HashMap<IndirectReference<XObject>, Name>,
-    /// Graphics state parameter dictionaries with their resource names. A `Vec` because
-    /// `ExtGState` holds floats and cannot be hashed; pages only use a handful of them.
-    pub(crate) ext_g_states: Vec<(ExtGState, Name)>,
-    /// Shadings and shading patterns with their resource names, a `Vec` for the same reason.
-    pub(crate) shadings: Vec<(Shading, Name)>,
-    pub(crate) patterns: Vec<(Pattern, Name)>,
-    /// The named colour spaces.
-    pub(crate) color_spaces: Vec<(ColorSpaceResource, Name)>,
-    /// The opacity that the content written so far has set, see [`PageContext::ensure_fill_alpha`].
-    pub(crate) opacity: Opacity,
-    pub(crate) content_stream: StreamEncoder,
-    pub(crate) page: &'page mut Page,
-    pub pdf_context: &'context_borrow mut DocumentContext<'context>,
+pub struct ContentWriter {
+    stream: StreamEncoder,
 }
 
-/// Turns a map from objects to their resource names into a resource dictionary.
-fn by_name<T>(map: HashMap<IndirectReference<T>, Name>) -> BTreeMap<Name, IndirectReference<T>> {
-    map.into_iter().map(|(reference, key)| (key, reference)).collect()
-}
-
-impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_borrow> {
-    /// Adds a font to the resources of the page and returns its resource name.
-    pub fn add_font(&mut self, font: IndirectReference<Font>) -> Name {
-        let num_fonts = self.fonts.len();
-        self.fonts
-            .entry(font)
-            .or_insert_with(|| Name::from(format!("F{}", num_fonts)))
-            .clone()
+impl ContentWriter {
+    pub(crate) fn new(filter: Option<StreamFilter>) -> Self {
+        ContentWriter { stream: StreamEncoder::new(filter) }
     }
 
-    /// Adds an XObject (for example an image from `DocumentContext::write_image`) to the
-    /// resources of the page and returns its resource name.
-    pub fn add_xobject(&mut self, x_object: impl Into<IndirectReference<XObject>>) -> Name {
-        let num_x_objects = self.x_objects.len();
-        self.x_objects
-            .entry(x_object.into())
-            .or_insert_with(|| Name::from(format!("X{}", num_x_objects)))
-            .clone()
+    pub(crate) fn into_encoder(self) -> StreamEncoder {
+        self.stream
     }
 
-    /// Adds a graphics state parameter dictionary to the resources of the page and returns its
-    /// resource name. Adding an equal dictionary again returns the same name.
-    pub fn add_ext_gstate(&mut self, state: ExtGState) -> Name {
-        if let Some((_, key)) = self.ext_g_states.iter().find(|(other, _)| *other == state) {
-            return key.clone();
+    /// Writes an operator with its operands, for the operators that have no method.
+    pub fn write_operator(&mut self, operator: &str, operands: &[&dyn PdfFormat]) -> Result<()> {
+        for operand in operands {
+            operand.write(&mut Formatter { writer: &mut self.stream })?;
+            write!(self.stream, " ")?;
         }
-        let key = Name::from(format!("GS{}", self.ext_g_states.len()));
-        self.ext_g_states.push((state, key.clone()));
-        key
+        write!(self.stream, "{} ", operator)
     }
 
-    /// Adds a colour space (Lab, CalRGB or one from an ICC profile) to the resources of the page
-    /// and returns its resource name. Adding an equal space again returns the same name.
-    pub fn add_color_space(&mut self, space: impl Into<ColorSpaceResource>) -> Name {
-        let space = space.into();
-        if let Some((_, key)) = self.color_spaces.iter().find(|(other, key)| *other == space && !key.as_str().starts_with("Default")) {
-            return key.clone();
-        }
-        let mut number = self.color_spaces.len();
-        let key = loop {
-            let key = Name::from(format!("CS{}", number));
-            if !self.color_spaces.iter().any(|(_, other)| *other == key) {
-                break key;
-            }
-            number += 1;
-        };
-        self.color_spaces.push((space, key.clone()));
-        key
-    }
+    // graphics state (8.4)
 
-    /// Defines what the device colours of this page mean (`DefaultRGB` and the like in the
-    /// resources): with an sRGB profile, `DeviceRGB` colours are sRGB in every viewer, images
-    /// and shadings included, instead of whatever the viewer takes the device to be. The space
-    /// must have as many components as the device space (`Rgb`: 3). Setting it again replaces it.
-    pub fn set_default_color_space(
-        &mut self,
-        kind: crate::color_space::DefaultColorSpace,
-        space: crate::color_space::IccBasedColorSpace,
-    ) {
-        let key = Name::from(kind.resource_name().to_owned());
-        self.color_spaces.retain(|(_, name)| *name != key);
-        self.color_spaces.push((space.into(), key));
-    }
-
-    /// Makes fills use a colour of a space from `add_color_space` (`cs` and `sc` operators): the
-    /// `components` are the ones of the space, so three for every space that there is yet.
-    pub fn set_fill_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
-        self.write_operation1(space, "cs")?;
-        for component in components {
-            self.push_operand(Precise(*component))?;
-        }
-        self.apply_operator("sc")
-    }
-
-    /// Makes strokes use a colour of a space from `add_color_space` (`CS` and `SC` operators).
-    pub fn set_stroke_color_components(&mut self, space: &Name, components: &[f64]) -> Result<()> {
-        self.write_operation1(space, "CS")?;
-        for component in components {
-            self.push_operand(Precise(*component))?;
-        }
-        self.apply_operator("SC")
-    }
-
-    /// Makes fills use a colour of a Lab space from `add_color_space` (`cs` and `sc`
-    /// operators).
-    pub fn lab_fill_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
-        self.write_operation1(space, "cs")?;
-        self.write_operation3(Precise(l), Precise(a), Precise(b), "sc")
-    }
-
-    /// Makes strokes use a colour of a Lab space from `add_color_space` (`CS` and `SC`
-    /// operators).
-    pub fn lab_stroke_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
-        self.write_operation1(space, "CS")?;
-        self.write_operation3(Precise(l), Precise(a), Precise(b), "SC")
-    }
-
-    /// Applies a graphics state parameter dictionary from `add_ext_gstate` (`gs` operator).
-    pub fn set_ext_gstate(&mut self, key: &Name) -> Result<()> {
-        if let Some((state, _)) = self.ext_g_states.iter().find(|(_, name)| name == key) {
-            if let Some(alpha) = state.fill_alpha {
-                self.opacity.fill = Some(alpha);
-            }
-            if let Some(alpha) = state.stroke_alpha {
-                self.opacity.stroke = Some(alpha);
-            }
-        }
-        self.write_operation1(key, "gs")
-    }
-
-    /// Adds `state` to the resources of the page and applies it.
-    pub fn apply_ext_gstate(&mut self, state: ExtGState) -> Result<()> {
-        let key = self.add_ext_gstate(state);
-        self.set_ext_gstate(&key)
-    }
-
-    /// Sets the opacity (0 to 1) of fills, text and images.
-    pub fn set_fill_alpha(&mut self, alpha: f64) -> Result<()> {
-        self.apply_ext_gstate(ExtGState::new().with_fill_alpha(alpha))
-    }
-
-    /// Sets the opacity (0 to 1) of strokes.
-    pub fn set_stroke_alpha(&mut self, alpha: f64) -> Result<()> {
-        self.apply_ext_gstate(ExtGState::new().with_stroke_alpha(alpha))
-    }
-
-    /// Like [`set_fill_alpha`](Self::set_fill_alpha), but writes nothing if the fill opacity is
-    /// known to be `alpha` already: the page context follows the opacity that the content set
-    /// (`set_fill_alpha`, `set_stroke_alpha`, `gs` with an `ExtGState` that has one) and what
-    /// `q` and `Q` restore. A page, a form and a pattern start out opaque; the opacity that a
-    /// form inherits from the place it is painted at is not known to it, so a form that is
-    /// painted under another opacity has to set its own explicitly (`set_fill_alpha`) if it
-    /// depends on it.
-    pub fn ensure_fill_alpha(&mut self, alpha: f64) -> Result<()> {
-        let alpha = crate::graphics_state::clamp_alpha(alpha);
-        if self.opacity.fill == Some(alpha) {
-            return Ok(());
-        }
-        self.set_fill_alpha(alpha)
-    }
-
-    /// Like [`set_stroke_alpha`](Self::set_stroke_alpha), but writes nothing if the stroke
-    /// opacity is known to be `alpha` already, see [`ensure_fill_alpha`](Self::ensure_fill_alpha).
-    pub fn ensure_stroke_alpha(&mut self, alpha: f64) -> Result<()> {
-        let alpha = crate::graphics_state::clamp_alpha(alpha);
-        if self.opacity.stroke == Some(alpha) {
-            return Ok(());
-        }
-        self.set_stroke_alpha(alpha)
-    }
-
-    /// Makes what is painted next opaque (fills and strokes), for what has no colour of its own
-    /// (an image) and must not take the transparency of the colour set before. Writes nothing
-    /// that is not needed.
-    pub fn ensure_opaque(&mut self) -> Result<()> {
-        self.ensure_fill_alpha(1.0)?;
-        self.ensure_stroke_alpha(1.0)
-    }
-
-    /// Forgets the opacity that the page context knows, so that the next `ensure_*` writes it
-    /// again. For what changes the opacity without the page context seeing it (an operator
-    /// written with `apply_operator`, or a `gs` that was applied some other way).
-    pub fn forget_alpha(&mut self) {
-        self.opacity.fill = None;
-        self.opacity.stroke = None;
-    }
-
-    pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> Result<()> {
-        self.apply_ext_gstate(ExtGState::new().with_blend_mode(blend_mode))
-    }
-
-    /// Adds a shading to the resources of the page and returns its resource name. Adding an
-    /// equal shading again returns the same name.
-    pub fn add_shading(&mut self, shading: impl Into<Shading>) -> Name {
-        let shading = shading.into();
-        if let Some((_, key)) = self.shadings.iter().find(|(other, _)| *other == shading) {
-            return key.clone();
-        }
-        let key = Name::from(format!("Sh{}", self.shadings.len()));
-        self.shadings.push((shading, key.clone()));
-        key
-    }
-
-    /// Paints a shading from `add_shading` (`sh` operator) everywhere inside of the current
-    /// clipping path, in the current user space. Clip to the shape that is to be painted first
-    /// (see `clip`), inside of a saved graphics state.
-    pub fn paint_shading(&mut self, key: &Name) -> Result<()> {
-        self.write_operation1(key, "sh")
-    }
-
-    /// Adds a shading pattern to the resources of the page and returns its resource name.
-    /// Adding an equal pattern again returns the same name.
-    pub fn add_shading_pattern(&mut self, pattern: ShadingPattern) -> Name {
-        self.add_pattern(pattern.into())
-    }
-
-    /// Adds a tiling pattern from `DocumentContext::write_tiling_pattern` to the resources of
-    /// the page and returns its resource name.
-    pub fn add_tiling_pattern(&mut self, pattern: IndirectReference<TilingPattern>) -> Name {
-        self.add_pattern(pattern.into())
-    }
-
-    fn add_pattern(&mut self, pattern: Pattern) -> Name {
-        if let Some((_, key)) = self.patterns.iter().find(|(other, _)| *other == pattern) {
-            return key.clone();
-        }
-        let key = Name::from(format!("P{}", self.patterns.len()));
-        self.patterns.push((pattern, key.clone()));
-        key
-    }
-
-    /// Sets the rendering intent (`ri` operator), which tells a reader how to map the colours that
-    /// the device cannot show.
-    pub fn set_rendering_intent(&mut self, intent: crate::graphics_state::RenderingIntent) -> Result<()> {
-        self.write_operation1(intent, "ri")
-    }
-
-    /// Makes fills use a pattern from `add_shading_pattern` or `add_tiling_pattern` as their color
-    /// (`/Pattern cs` and `scn` operators).
-    pub fn set_fill_pattern(&mut self, key: &Name) -> Result<()> {
-        self.write_operation1(Name::from("Pattern"), "cs")?;
-        self.write_operation1(key, "scn")
-    }
-
-    /// Makes strokes use a pattern from `add_shading_pattern` as their color
-    /// (`/Pattern CS` and `SCN` operators).
-    pub fn set_stroke_pattern(&mut self, key: &Name) -> Result<()> {
-        self.write_operation1(Name::from("Pattern"), "CS")?;
-        self.write_operation1(key, "SCN")
-    }
-
-    /// Paints an XObject from `add_xobject` (`Do` operator) in the current user space.
-    pub fn draw_xobject(&mut self, key: &Name) -> Result<()> {
-        self.write_operation1(key, "Do")
-    }
-
-    /// Paints an image from `add_xobject` into the rectangle with the lower left corner
-    /// (`x`, `y`). The graphics state is left unchanged.
-    pub fn draw_image(&mut self, key: &Name, x: Pt, y: Pt, width: Pt, height: Pt) -> Result<()> {
-        self.save_graphics_state()?;
-        // images are painted into the unit square
-        self.concatenate_matrix(width.0, 0.0, 0.0, height.0, x, y)?;
-        self.draw_xobject(key)?;
-        self.restore_graphics_state()
-    }
-
-    pub fn push_operand(&mut self, operand: impl PdfFormat) -> Result<()> {
-        let mut formatter = Formatter {
-            writer: &mut self.content_stream,
-        };
-        operand.write(&mut formatter)?;
-        write!(self.content_stream, " ")
-    }
-
-    pub fn apply_operator(&mut self, operator: &str) -> Result<()> {
-        write!(self.content_stream, "{} ", operator)
-    }
-
-    pub fn write_operation1(&mut self, arg1: impl PdfFormat, operator: &str) -> Result<()> {
-        self.push_operand(arg1)?;
-        self.apply_operator(operator)
-    }
-
-    pub fn write_operation2(
-        &mut self,
-        arg1: impl PdfFormat,
-        arg2: impl PdfFormat,
-        operator: &str,
-    ) -> Result<()> {
-        self.push_operand(arg1)?;
-        self.push_operand(arg2)?;
-        self.apply_operator(operator)
-    }
-
-    pub fn write_operation3(
-        &mut self,
-        arg1: impl PdfFormat,
-        arg2: impl PdfFormat,
-        arg3: impl PdfFormat,
-        operator: &str,
-    ) -> Result<()> {
-        self.push_operand(arg1)?;
-        self.push_operand(arg2)?;
-        self.push_operand(arg3)?;
-        self.apply_operator(operator)
-    }
-
-    pub fn write_operation4(
-        &mut self,
-        arg1: impl PdfFormat,
-        arg2: impl PdfFormat,
-        arg3: impl PdfFormat,
-        arg4: impl PdfFormat,
-        operator: &str,
-    ) -> Result<()> {
-        self.push_operand(arg1)?;
-        self.push_operand(arg2)?;
-        self.push_operand(arg3)?;
-        self.push_operand(arg4)?;
-        self.apply_operator(operator)
-    }
-
+    /// `q`
     pub fn save_graphics_state(&mut self) -> Result<()> {
-        self.opacity.saved.push((self.opacity.fill, self.opacity.stroke));
-        self.apply_operator("q")
+        self.write_operator("q", &[])
     }
 
+    /// `Q`
     pub fn restore_graphics_state(&mut self) -> Result<()> {
-        if let Some((fill, stroke)) = self.opacity.saved.pop() {
-            self.opacity.fill = fill;
-            self.opacity.stroke = stroke;
-        }
-        self.apply_operator("Q")
+        self.write_operator("Q", &[])
     }
 
-    pub fn concatenate_matrix(
-        &mut self,
-        a: f64,
-        b: f64,
-        c: f64,
-        d: f64,
-        e: Pt,
-        f: Pt,
-    ) -> Result<()> {
-        self.push_operand(a)?;
-        self.push_operand(b)?;
-        self.push_operand(c)?;
-        self.push_operand(d)?;
-        self.push_operand(e)?;
-        self.push_operand(f)?;
-        self.apply_operator("cm")
+    /// `cm`: concatenates `matrix` to the current transformation matrix.
+    pub fn concatenate_matrix(&mut self, matrix: Matrix) -> Result<()> {
+        let [a, b, c, d, e, f] = matrix.0;
+        self.write_operator("cm", &[&a, &b, &c, &d, &e, &f])
     }
 
-    pub fn line_width(&mut self, width: Pt) -> Result<()> {
-        self.write_operation1(width, "w")
+    /// `w`
+    pub fn set_line_width(&mut self, width: Pt) -> Result<()> {
+        self.write_operator("w", &[&width])
     }
 
-    pub fn line_cap(&mut self, cap: LineCap) -> Result<()> {
-        self.write_operation1(cap as i64, "J")
+    /// `J`
+    pub fn set_line_cap(&mut self, cap: LineCap) -> Result<()> {
+        self.write_operator("J", &[&(cap as i64)])
     }
 
-    pub fn line_join(&mut self, join: LineJoin) -> Result<()> {
-        self.write_operation1(join as i64, "j")
+    /// `j`
+    pub fn set_line_join(&mut self, join: LineJoin) -> Result<()> {
+        self.write_operator("j", &[&(join as i64)])
     }
 
-    /// Limits the length of miter joins, as a ratio of the miter length to the line width.
-    pub fn miter_limit(&mut self, limit: f64) -> Result<()> {
-        self.write_operation1(limit, "M")
+    /// `M`: limits the length of miter joins, as a ratio of the miter length to the line width.
+    pub fn set_miter_limit(&mut self, limit: f64) -> Result<()> {
+        self.write_operator("M", &[&limit])
     }
 
-    /// Sets the dash pattern: alternating lengths of dashes and gaps, starting `phase` into
-    /// the pattern. An empty `dashes` slice draws solid lines.
-    pub fn dash_pattern(&mut self, dashes: &[Pt], phase: Pt) -> Result<()> {
-        self.write_operation2(dashes, phase, "d")
+    /// `d`: alternating lengths of dashes and gaps, starting `phase` into the pattern. An empty
+    /// `dashes` slice draws solid lines.
+    pub fn set_dash_pattern(&mut self, dashes: &[Pt], phase: Pt) -> Result<()> {
+        self.write_operator("d", &[&dashes, &phase])
     }
 
-    // (the components of a colour have six decimals: two would be steps of more than 8 bits)
-    pub fn device_gray_fill_color(&mut self, gray: f64) -> Result<()> {
-        self.write_operation1(Precise(gray), "g")
+    /// `ri`: tells a reader how to map the colours that the device cannot show.
+    pub fn set_rendering_intent(&mut self, intent: RenderingIntent) -> Result<()> {
+        self.write_operator("ri", &[&intent])
     }
 
-    pub fn device_gray_stroke_color(&mut self, gray: f64) -> Result<()> {
-        self.write_operation1(Precise(gray), "G")
+    /// `gs`: applies a graphics state parameter dictionary.
+    pub fn set_ext_gstate(&mut self, key: &ExtGStateKey) -> Result<()> {
+        self.write_operator("gs", &[key])
     }
 
-    pub fn device_rgb_fill_color(&mut self, red: f64, green: f64, blue: f64) -> Result<()> {
-        self.write_operation3(Precise(red), Precise(green), Precise(blue), "rg")
-    }
+    // paths (8.5)
 
-    pub fn device_rgb_stroke_color(&mut self, red: f64, green: f64, blue: f64) -> Result<()> {
-        self.write_operation3(Precise(red), Precise(green), Precise(blue), "RG")
-    }
-
-    pub fn device_cmyk_fill_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
-        self.write_operation4(Precise(c), Precise(m), Precise(y), Precise(k), "k")
-    }
-
-    pub fn device_cmyk_stroke_color(&mut self, c: f64, m: f64, y: f64, k: f64) -> Result<()> {
-        self.write_operation4(Precise(c), Precise(m), Precise(y), Precise(k), "K")
-    }
-
+    /// `m`
     pub fn move_to(&mut self, x: Pt, y: Pt) -> Result<()> {
-        self.write_operation2(x, y, "m")
+        self.write_operator("m", &[&x, &y])
     }
 
+    /// `l`
     pub fn line_to(&mut self, x: Pt, y: Pt) -> Result<()> {
-        self.write_operation2(x, y, "l")
+        self.write_operator("l", &[&x, &y])
     }
 
-    /// Appends a cubic Bézier curve from the current point to (`x3`, `y3`) with the control
+    /// `c`: appends a cubic Bézier curve from the current point to (`x3`, `y3`) with the control
     /// points (`x1`, `y1`) and (`x2`, `y2`).
     pub fn curve_to(&mut self, x1: Pt, y1: Pt, x2: Pt, y2: Pt, x3: Pt, y3: Pt) -> Result<()> {
-        for operand in &[x1, y1, x2, y2, x3, y3] {
-            self.push_operand(operand)?;
-        }
-        self.apply_operator("c")
+        self.write_operator("c", &[&x1, &y1, &x2, &y2, &x3, &y3])
     }
 
+    /// `re`
     pub fn rect(&mut self, x: Pt, y: Pt, width: Pt, height: Pt) -> Result<()> {
-        self.write_operation4(x, y, width, height, "re")
+        self.write_operator("re", &[&x, &y, &width, &height])
     }
 
+    /// `h`
     pub fn close_path(&mut self) -> Result<()> {
-        self.apply_operator("h")
+        self.write_operator("h", &[])
     }
 
+    /// `S`
     pub fn stroke_path(&mut self) -> Result<()> {
-        self.apply_operator("S")
+        self.write_operator("S", &[])
     }
 
+    /// `s`
     pub fn close_and_stroke_path(&mut self) -> Result<()> {
-        self.apply_operator("s")
+        self.write_operator("s", &[])
     }
 
-    /// Fills the path with the nonzero winding number rule.
+    /// `f`: fills the path with the nonzero winding number rule.
     pub fn fill_path(&mut self) -> Result<()> {
-        self.apply_operator("f")
+        self.write_operator("f", &[])
     }
 
-    /// Fills the path with the given fill rule.
+    /// `f` or `f*`: fills the path with the given fill rule.
     pub fn fill_path_with_rule(&mut self, rule: FillRule) -> Result<()> {
-        match rule {
-            FillRule::NonZero => self.apply_operator("f"),
-            FillRule::EvenOdd => self.apply_operator("f*"),
-        }
+        self.write_operator(if rule == FillRule::EvenOdd { "f*" } else { "f" }, &[])
     }
 
-    /// Fills, then strokes the path.
+    /// `B` or `B*`: fills, then strokes the path.
     pub fn fill_and_stroke_path(&mut self, rule: FillRule) -> Result<()> {
-        match rule {
-            FillRule::NonZero => self.apply_operator("B"),
-            FillRule::EvenOdd => self.apply_operator("B*"),
-        }
+        self.write_operator(if rule == FillRule::EvenOdd { "B*" } else { "B" }, &[])
     }
 
-    /// Closes, fills, then strokes the path.
+    /// `b` or `b*`: closes, fills, then strokes the path.
     pub fn close_fill_and_stroke_path(&mut self, rule: FillRule) -> Result<()> {
-        match rule {
-            FillRule::NonZero => self.apply_operator("b"),
-            FillRule::EvenOdd => self.apply_operator("b*"),
-        }
+        self.write_operator(if rule == FillRule::EvenOdd { "b*" } else { "b" }, &[])
     }
 
-    /// Ends the path without painting it, for example after `clip`.
+    /// `n`: ends the path without painting it, for example after `clip`.
     pub fn end_path(&mut self) -> Result<()> {
-        self.apply_operator("n")
+        self.write_operator("n", &[])
     }
 
-    /// Intersects the clipping path with the current path. The clipping path takes effect
-    /// after the next path painting operator (usually `end_path`) and lasts until the graphics
-    /// state is restored.
+    /// `W` or `W*`: intersects the clipping path with the current path. The clipping path takes
+    /// effect after the next path painting operator (usually `end_path`) and lasts until the
+    /// graphics state is restored.
     pub fn clip(&mut self, rule: FillRule) -> Result<()> {
-        match rule {
-            FillRule::NonZero => self.apply_operator("W"),
-            FillRule::EvenOdd => self.apply_operator("W*"),
+        self.write_operator(if rule == FillRule::EvenOdd { "W*" } else { "W" }, &[])
+    }
+
+    // colour (8.6)
+
+    /// Makes fills use `color`.
+    pub fn set_fill_color(&mut self, color: ColorOperand<'_>) -> Result<()> {
+        self.set_color(color, false)
+    }
+
+    /// Makes strokes use `color`.
+    pub fn set_stroke_color(&mut self, color: ColorOperand<'_>) -> Result<()> {
+        self.set_color(color, true)
+    }
+
+    fn set_color(&mut self, color: ColorOperand<'_>, stroke: bool) -> Result<()> {
+        let pick = |fill: &'static str, stroke_operator: &'static str| if stroke { stroke_operator } else { fill };
+        match color {
+            ColorOperand::Gray(gray) => self.write_operator(pick("g", "G"), &[&Precise(gray)]),
+            ColorOperand::Rgb(r, g, b) => self.write_operator(pick("rg", "RG"), &[&Precise(r), &Precise(g), &Precise(b)]),
+            ColorOperand::Cmyk(c, m, y, k) => {
+                self.write_operator(pick("k", "K"), &[&Precise(c), &Precise(m), &Precise(y), &Precise(k)])
+            }
+            ColorOperand::Space(space, components) => {
+                self.write_operator(pick("cs", "CS"), &[space])?;
+                let components: Vec<Precise> = components.iter().map(|value| Precise(*value)).collect();
+                let operands: Vec<&dyn PdfFormat> = components.iter().map(|value| value as &dyn PdfFormat).collect();
+                self.write_operator(pick("sc", "SC"), &operands)
+            }
+            ColorOperand::Pattern(pattern) => {
+                self.write_operator(pick("cs", "CS"), &[&Name::from("Pattern")])?;
+                self.write_operator(pick("scn", "SCN"), &[pattern])
+            }
         }
     }
 
+    // painting objects (8.7 to 8.10)
+
+    /// `sh`: paints a shading everywhere inside of the current clipping path, in the current
+    /// user space. Clip to the shape that is to be painted first (see `clip`), inside of a saved
+    /// graphics state.
+    pub fn paint_shading(&mut self, key: &ShadingKey) -> Result<()> {
+        self.write_operator("sh", &[key])
+    }
+
+    /// `Do`: paints an XObject in the current user space.
+    pub fn paint_xobject(&mut self, key: &XObjectKey) -> Result<()> {
+        self.write_operator("Do", &[key])
+    }
+
+    // text (9)
+
+    /// `BT`
     pub fn begin_text(&mut self) -> Result<()> {
-        self.apply_operator("BT")
+        self.write_operator("BT", &[])
     }
 
+    /// `ET`
     pub fn end_text(&mut self) -> Result<()> {
-        self.apply_operator("ET")
+        self.write_operator("ET", &[])
     }
 
-    pub fn set_font(&mut self, font_key: &Name, size: Pt) -> Result<()> {
-        self.write_operation2(font_key, size, "Tf")
+    /// `Tf`
+    pub fn set_font(&mut self, font: &FontKey, size: Pt) -> Result<()> {
+        self.write_operator("Tf", &[font, &size])
     }
 
-    pub fn set_position(&mut self, x: Pt, y: Pt) -> Result<()> {
-        self.write_operation2(x, y, "Td")
+    /// `Td`: moves to the start of the next line, offset from the start of the current one.
+    pub fn move_text_position(&mut self, x: Pt, y: Pt) -> Result<()> {
+        self.write_operator("Td", &[&x, &y])
     }
 
-    /// Shows glyphs of a simple font, one byte per glyph (`Tj` operator).
-    pub fn draw_simple_glyphs(&mut self, characters: &[u8]) -> Result<()> {
-        write_literal_string(&mut self.content_stream, characters)?;
-        write!(self.content_stream, " Tj ")
+    /// `Tm`: sets the text matrix and the text line matrix.
+    pub fn set_text_matrix(&mut self, matrix: Matrix) -> Result<()> {
+        let [a, b, c, d, e, f] = matrix.0;
+        self.write_operator("Tm", &[&a, &b, &c, &d, &e, &f])
     }
 
-    pub fn draw_cid_glyphs(&mut self, glyphs: impl IntoIterator<Item = u16>) -> Result<()> {
-        write!(self.content_stream, "<")?;
+    /// `Tr`: 0 fills, 1 strokes, 2 fills and strokes, 3 neither (ISO 32000-1, 9.3.6).
+    pub fn set_text_rendering_mode(&mut self, mode: i64) -> Result<()> {
+        self.write_operator("Tr", &[&mode])
+    }
+
+    /// `Tw`
+    pub fn set_word_spacing(&mut self, spacing: Pt) -> Result<()> {
+        self.write_operator("Tw", &[&spacing])
+    }
+
+    /// `Ts`
+    pub fn set_text_rise(&mut self, rise: Pt) -> Result<()> {
+        self.write_operator("Ts", &[&rise])
+    }
+
+    /// `Tj`: shows glyphs of a simple font, one byte per glyph.
+    pub fn show_simple_glyphs(&mut self, characters: &[u8]) -> Result<()> {
+        write_literal_string(&mut self.stream, characters)?;
+        write!(self.stream, " Tj ")
+    }
+
+    /// `Tj`: shows glyphs of a composite font, two bytes per glyph.
+    pub fn show_cid_glyphs(&mut self, glyphs: impl IntoIterator<Item = u16>) -> Result<()> {
+        write!(self.stream, "<")?;
         for glyph in glyphs {
-            self.content_stream.write_hex_escaped(&glyph.to_be_bytes())?;
+            self.stream.write_hex_escaped(&glyph.to_be_bytes())?;
         }
-        write!(self.content_stream, "> Tj ")?;
-        Ok(())
+        write!(self.stream, "> Tj ")
     }
 
-    /// The resources the content used, the encoded content, and the page and document the
-    /// context was borrowing.
-    #[allow(clippy::type_complexity)]
-    fn into_parts(
-        self,
-    ) -> (
-        ResourceDictionary,
-        StreamEncoder,
-        &'page mut Page,
-        &'context_borrow mut DocumentContext<'context>,
-    ) {
-        let resources = ResourceDictionary {
-            font: by_name(self.fonts),
-            x_object: by_name(self.x_objects),
-            ext_g_state: self
-                .ext_g_states
-                .into_iter()
-                .map(|(state, key)| (key, state))
-                .collect(),
-            shading: self
-                .shadings
-                .into_iter()
-                .map(|(shading, key)| (key, shading))
-                .collect(),
-            pattern: self
-                .patterns
-                .into_iter()
-                .map(|(pattern, key)| (key, pattern))
-                .collect(),
-            color_space: self
-                .color_spaces
-                .into_iter()
-                .map(|(space, key)| (key, space))
-                .collect(),
-        };
-        (resources, self.content_stream, self.page, self.pdf_context)
+    /// `TJ`: shows an array of strings and the adjustments between them.
+    pub fn show_text_array(&mut self, array: &dyn PdfFormat) -> Result<()> {
+        self.write_operator("TJ", &[array])
     }
 
-    pub(crate) fn finish(self) -> Result<()> {
-        let (resources, content_stream, page, pdf_context) = self.into_parts();
-        page.resources = Some(resources);
+    // marked content (14.6)
 
-        let content_stream = Stream::from_encoder(ContentStreamDict {}, content_stream)?;
+    /// `BMC`
+    pub fn begin_marked_content(&mut self, tag: &Name) -> Result<()> {
+        self.write_operator("BMC", &[tag])
+    }
+
+    /// `BDC`: `properties` is a property list (a dictionary).
+    pub fn begin_marked_content_with_properties(&mut self, tag: &Name, properties: &dyn PdfFormat) -> Result<()> {
+        self.write_operator("BDC", &[tag, properties])
+    }
+
+    /// `EMC`
+    pub fn end_marked_content(&mut self) -> Result<()> {
+        self.write_operator("EMC", &[])
+    }
+}
+
+/// What a page, a form or a pattern is drawn with: the operators of its content stream and the
+/// resources they use, and the document that the resources are written to.
+#[derive(Debug)]
+pub struct PageContext<'a, 'doc> {
+    pub content: ContentWriter,
+    pub resources: Resources,
+    pub pdf_context: &'a mut DocumentContext<'doc>,
+}
+
+impl<'a, 'doc> PageContext<'a, 'doc> {
+    pub(crate) fn new(pdf_context: &'a mut DocumentContext<'doc>, filter: Option<StreamFilter>) -> Self {
+        PageContext { content: ContentWriter::new(filter), resources: Resources::new(), pdf_context }
+    }
+
+    /// Writes the content of the page: its content stream, and its resources.
+    pub(crate) fn finish(self, page: &mut Page) -> Result<()> {
+        let PageContext { content, resources, pdf_context } = self;
+        page.resources = Some(resources.into_dictionary());
+        let content_stream = Stream::from_encoder(ContentStreamDict {}, content.into_encoder())?;
         let content_stream_ref = pdf_context.write_object(content_stream)?;
         page.contents = vec![content_stream_ref];
         Ok(())
     }
 }
 
-impl<'context> DocumentContext<'context> {
+impl<'doc> DocumentContext<'doc> {
     /// Writes a tiling pattern (ISO 32000-1, 8.7.3) and returns a reference to it.
     ///
     /// `content` draws one cell like a page, in pattern space; everything outside of `bbox`
@@ -659,67 +397,51 @@ impl<'context> DocumentContext<'context> {
         y_step: Pt,
         matrix: Matrix,
         stream_filter: Option<StreamFilter>,
-        content: impl FnOnce(&mut PageContext<'_, 'context, '_>) -> Result<()>,
+        content: impl FnOnce(&mut PageContext<'_, 'doc>) -> Result<()>,
     ) -> Result<IndirectReference<TilingPattern>> {
-        let mut page = Page::new();
-        let mut context = PageContext {
-            fonts: HashMap::new(),
-            x_objects: HashMap::new(),
-            ext_g_states: Vec::new(),
-            shadings: Vec::new(),
-            patterns: Vec::new(),
-            color_spaces: Vec::new(),
-            opacity: Opacity::default(),
-            content_stream: StreamEncoder::new(stream_filter),
-            page: &mut page,
-            pdf_context: self,
-        };
+        let mut context = PageContext::new(self, stream_filter);
         content(&mut context)?;
-        let (resources, encoder, _, _) = context.into_parts();
+        let PageContext { content, resources, .. } = context;
         let dict = TilingPatternDict {
             bbox,
             x_step,
             y_step,
-            resources,
+            resources: resources.into_dictionary(),
             matrix: Some(matrix),
         };
-        self.write_object(Stream::from_encoder(dict, encoder)?)
+        self.write_object(Stream::from_encoder(dict, content.into_encoder())?)
     }
 
     /// Writes a form XObject (ISO 32000-1, 8.10) and returns a reference to it.
     ///
     /// `content` draws the form like a page, in form space; everything outside of `bbox`
     /// (`[xmin, ymin, xmax, ymax]`) is clipped. The form can be painted with
-    /// `PageContext::add_xobject` and `PageContext::draw_xobject`, or be the group of a
+    /// `Resources::add_xobject` and `ContentWriter::paint_xobject`, or be the group of a
     /// `SoftMask`. A form that is a soft mask group needs a transparency group.
     pub fn write_form(
         &mut self,
         bbox: [Pt; 4],
         group: Option<TransparencyGroup>,
         stream_filter: Option<StreamFilter>,
-        content: impl FnOnce(&mut PageContext<'_, 'context, '_>) -> Result<()>,
+        content: impl FnOnce(&mut PageContext<'_, 'doc>) -> Result<()>,
     ) -> Result<IndirectReference<FormXObject>> {
-        let mut page = Page::new();
-        let mut context = PageContext {
-            fonts: HashMap::new(),
-            x_objects: HashMap::new(),
-            ext_g_states: Vec::new(),
-            shadings: Vec::new(),
-            patterns: Vec::new(),
-            color_spaces: Vec::new(),
-            opacity: Opacity::default(),
-            content_stream: StreamEncoder::new(stream_filter),
-            page: &mut page,
-            pdf_context: self,
-        };
+        let mut context = PageContext::new(self, stream_filter);
         content(&mut context)?;
-        let (resources, encoder, _, _) = context.into_parts();
+        let PageContext { content, resources, .. } = context;
         let dict = FormDict {
             bbox,
             matrix: None,
-            resources,
+            resources: resources.into_dictionary(),
             group,
         };
-        self.write_object(Stream::from_encoder(dict, encoder)?)
+        self.write_object(Stream::from_encoder(dict, content.into_encoder())?)
+    }
+}
+
+impl PageContext<'_, '_> {
+    /// Adds `state` to the resources and applies it (`gs` operator).
+    pub fn apply_ext_gstate(&mut self, state: crate::graphics_state::ExtGState) -> Result<()> {
+        let key = self.resources.add_ext_gstate(state);
+        self.content.set_ext_gstate(&key)
     }
 }
