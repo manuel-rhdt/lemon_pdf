@@ -13,7 +13,7 @@
 
 use std::io::Result;
 
-use crate::color_space::{DefaultColorSpace, LabColorSpace, D50_WHITE_POINT};
+use crate::color_space::{DefaultColorSpace, IccBasedColorSpace, LabColorSpace, D50_WHITE_POINT};
 use crate::content::PageContext;
 use crate::icc::{self, rgb_matrix_profile, ParametricCurve};
 use crate::object::Name;
@@ -142,9 +142,9 @@ impl RgbSpace {
     }
 }
 
-/// The coordinates of a colour (CIE XYZ, D65) in the Rec. 2020 profile with the gamma 2.4: the linear
+/// The coordinates of a colour (CIE XYZ, D65) in [`RgbSpace::Rec2020`], the profile with the gamma 2.4: the linear
 /// ones to the power of 1/2.4. A colour that Rec. 2020 cannot hold is clipped, the only clipping here.
-fn rec2020_gamma24_components(xyz: [f64; 3]) -> [f64; 3] {
+pub fn rec2020_gamma24_components(xyz: [f64; 3]) -> [f64; 3] {
     multiply(&XYZ_TO_REC2020, xyz).map(|linear| linear.clamp(0.0, 1.0).powf(1.0 / 2.4))
 }
 
@@ -172,10 +172,15 @@ impl PageContext<'_, '_, '_> {
         Ok(())
     }
 
-    /// Adds the ICC space of `space` to the resources and returns its resource name. The profile is
-    /// written once for the document.
+    /// The ICC space of `space`, for what has a colour space of its own (a shading, with
+    /// `with_icc_profile`). The profile is written once for the document.
+    pub fn rgb_icc_space(&mut self, space: RgbSpace) -> Result<IccBasedColorSpace> {
+        self.pdf_context.icc_color_space(space.key(), || space.profile(), 3, Some(StreamFilter::Deflate))
+    }
+
+    /// Adds the ICC space of `space` to the resources and returns its resource name.
     pub fn add_rgb_space(&mut self, space: RgbSpace) -> Result<Name> {
-        let space = self.pdf_context.icc_color_space(space.key(), || space.profile(), 3, Some(StreamFilter::Deflate))?;
+        let space = self.rgb_icc_space(space)?;
         Ok(self.add_color_space(space))
     }
 
