@@ -106,8 +106,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut page = Page::new();
     page.add_content(&mut context, Some(StreamFilter::Deflate), |c| {
         for shading in shadings {
-            let key = c.add_shading(shading);
-            c.paint_shading(&key)?;
+            let key = c.resources.add_shading(shading);
+            c.content.paint_shading(&key)?;
         }
         Ok(())
     })?;

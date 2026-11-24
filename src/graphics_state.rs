@@ -131,7 +131,7 @@ impl PdfFormat for SoftMask {
     }
 }
 
-fn clamp_alpha(alpha: f64) -> f64 {
+pub(crate) fn clamp_alpha(alpha: f64) -> f64 {
     if alpha.is_nan() {
         1.0
     } else {

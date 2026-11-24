@@ -41,13 +41,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             PredefinedEncoding::WinAnsiEncoding,
         ));
         let font_ref = page_context.pdf_context.write_object(Font::Simple(font))?;
-        let font_key = page_context.add_font(font_ref);
+        let font_key = page_context.resources.add_font(font_ref);
 
-        page_context.begin_text()?;
-        page_context.set_font(&font_key, Pt(48.0))?;
-        page_context.set_position(Pt(20.0), Pt(20.0))?;
-        page_context.draw_simple_glyphs(&WINDOWS_1252.encode("Hello World!").0)?;
-        page_context.end_text()?;
+        page_context.content.begin_text()?;
+        page_context.content.set_font(&font_key, Pt(48.0))?;
+        page_context.content.move_text_position(Pt(20.0), Pt(20.0))?;
+        page_context.content.show_simple_glyphs(&WINDOWS_1252.encode("Hello World!").0)?;
+        page_context.content.end_text()?;
         Ok(())
     })?;
 

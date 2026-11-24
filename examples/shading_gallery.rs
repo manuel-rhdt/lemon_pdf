@@ -31,6 +31,7 @@ use lemon_pdf::shading::{
     AxialShading, Circle, ColorStop, Gradient, Point, RadialShading, Rgb, Shading,
 };
 use lemon_pdf::stream::StreamFilter;
+use lemon_pdf::content::ColorOperand;
 use lemon_pdf::{DocumentContext, Pt, Version};
 
 const NAVY: Rgb = Rgb(0.06, 0.11, 0.18);
@@ -188,39 +189,39 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut regular = BuiltInFont::Helvetica.font(c.pdf_context)?;
         regular.encoding = Some(EncodingEntry::Predefined(PredefinedEncoding::WinAnsiEncoding));
         let regular = c.pdf_context.write_object(Font::Simple(regular))?;
-        let regular = c.add_font(regular);
+        let regular = c.resources.add_font(regular);
         let mut bold = BuiltInFont::HelveticaBold.font(c.pdf_context)?;
         bold.encoding = Some(EncodingEntry::Predefined(PredefinedEncoding::WinAnsiEncoding));
         let bold = c.pdf_context.write_object(Font::Simple(bold))?;
-        let bold = c.add_font(bold);
+        let bold = c.resources.add_font(bold);
 
-        let text = |c: &mut lemon_pdf::content::PageContext<'_, '_, '_>, font, size, x, y, string: &str| {
-            c.begin_text()?;
-            c.set_font(font, Pt(size))?;
-            c.set_position(Pt(x), Pt(y))?;
-            c.draw_simple_glyphs(&WINDOWS_1252.encode(string).0)?;
-            c.end_text()
+        let text = |c: &mut lemon_pdf::content::PageContext<'_, '_>, font, size, x, y, string: &str| {
+            c.content.begin_text()?;
+            c.content.set_font(font, Pt(size))?;
+            c.content.move_text_position(Pt(x), Pt(y))?;
+            c.content.show_simple_glyphs(&WINDOWS_1252.encode(string).0)?;
+            c.content.end_text()
         };
 
-        c.device_rgb_fill_color(NAVY.0, NAVY.1, NAVY.2)?;
+        c.content.set_fill_color(ColorOperand::Rgb(NAVY.0, NAVY.1, NAVY.2))?;
         text(c, &bold, 26.0, 50.0, 775.0, "PDF shadings")?;
-        c.device_rgb_fill_color(0.35, 0.4, 0.5)?;
+        c.content.set_fill_color(ColorOperand::Rgb(0.35, 0.4, 0.5))?;
         text(c, &regular, 11.0, 50.0, 755.0, "All seven shading types of lemon_pdf that are implemented: 2 to 7.")?;
 
         for (index, shading) in shadings.iter().enumerate() {
             let (ox, oy) = panel_origin(index % 2, index / 2);
-            let key = c.add_shading(shading.clone());
-            c.save_graphics_state()?;
+            let key = c.resources.add_shading(shading.clone());
+            c.content.save_graphics_state()?;
             // a light backdrop shows where a shading does not paint
-            c.device_gray_fill_color(0.94)?;
-            c.rect(Pt(ox), Pt(oy), Pt(PANEL_WIDTH), Pt(PANEL_HEIGHT))?;
-            c.fill_path()?;
-            c.rect(Pt(ox), Pt(oy), Pt(PANEL_WIDTH), Pt(PANEL_HEIGHT))?;
-            c.clip(FillRule::NonZero)?;
-            c.end_path()?;
-            c.paint_shading(&key)?;
-            c.restore_graphics_state()?;
-            c.device_rgb_fill_color(NAVY.0, NAVY.1, NAVY.2)?;
+            c.content.set_fill_color(ColorOperand::Gray(0.94))?;
+            c.content.rect(Pt(ox), Pt(oy), Pt(PANEL_WIDTH), Pt(PANEL_HEIGHT))?;
+            c.content.fill_path()?;
+            c.content.rect(Pt(ox), Pt(oy), Pt(PANEL_WIDTH), Pt(PANEL_HEIGHT))?;
+            c.content.clip(FillRule::NonZero)?;
+            c.content.end_path()?;
+            c.content.paint_shading(&key)?;
+            c.content.restore_graphics_state()?;
+            c.content.set_fill_color(ColorOperand::Rgb(NAVY.0, NAVY.1, NAVY.2))?;
             text(c, &regular, 10.5, ox, oy - 16.0, captions[index])?;
         }
         Ok(())

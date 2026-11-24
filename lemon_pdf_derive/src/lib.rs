@@ -11,12 +11,15 @@ use syn::{
 ///
 /// - Structs with named fields are written as dictionaries. They also get an implementation of
 ///   `PdfDictionary`, so they can be flattened into other dictionaries.
-/// - Newtype structs are written as their field.
+/// - Newtype structs are written as their field, or with `#[array]` as an array of a name and
+///   their field (`[/Name field]`, like the colour space `[/ICCBased stream]`).
 /// - Enums are written as the value of their variant. Unit variants are written as names;
 ///   every other variant must have exactly one field, so that every value is one PDF object.
 ///
 /// Struct attributes:
 /// - `#[rename("Name")]`: the value of the `/Type` key (default: the struct name).
+/// - `#[array]`: for a newtype struct, which is written as `[/Name field]` with the name of
+///   `#[rename("Name")]` (required).
 /// - `#[omit_type(true)]`: don't write a `/Type` key.
 /// - `#[constant(Key = "Value")]`: write the fixed entry `/Key /Value` after `/Type`, for example
 ///   `#[constant(Subtype = "Link")]`. A number is written as a number: `#[constant(FunctionType
@@ -38,7 +41,7 @@ use syn::{
 ///   to the enum is expected.
 #[proc_macro_derive(
     PdfFormat,
-    attributes(rename, skip_if, omit_type, constant, flatten, indirect_variants)
+    attributes(rename, skip_if, omit_type, constant, flatten, indirect_variants, array)
 )]
 pub fn pdf_format_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ast: DeriveInput = syn::parse2(TokenStream::from(input)).unwrap();
@@ -72,10 +75,27 @@ pub fn pdf_format_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStr
                 quote!(lemon_pdf::PdfFormat),
                 quote!(lemon_pdf::PdfFormat),
             );
-            quote! {
-                #format {
-                    fn write(&self, f: &mut lemon_pdf::object::Formatter) -> std::io::Result<()> {
-                        lemon_pdf::PdfFormat::write(&self.0, f)
+            let attr = parse_attributes(&ast.attrs);
+            if attr.array {
+                let name = attr
+                    .rename
+                    .expect("#[array] needs the name of the array: `#[rename(\"Name\")]`");
+                quote! {
+                    #format {
+                        fn write(&self, f: &mut lemon_pdf::object::Formatter) -> std::io::Result<()> {
+                            f.format_array()
+                                .value(&lemon_pdf::object::Name::from(#name))
+                                .value(&self.0)
+                                .finish()
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    #format {
+                        fn write(&self, f: &mut lemon_pdf::object::Formatter) -> std::io::Result<()> {
+                            lemon_pdf::PdfFormat::write(&self.0, f)
+                        }
                     }
                 }
             }
@@ -363,6 +383,7 @@ fn impl_enum_pdf_format(ast: &DeriveInput, data: &DataEnum) -> TokenStream {
 struct StructAttr {
     omit_type: bool,
     flatten: bool,
+    array: bool,
     indirect_variants: bool,
     rename: Option<String>,
     skip_if: Option<Path>,
@@ -396,6 +417,10 @@ fn parse_attributes(attributes: &[Attribute]) -> StructAttr {
             "flatten" => match attribute.parse_meta() {
                 Ok(Meta::Word(_)) => result.flatten = true,
                 _ => panic!("expected `#[flatten]`"),
+            },
+            "array" => match attribute.parse_meta() {
+                Ok(Meta::Word(_)) => result.array = true,
+                _ => panic!("expected `#[array]`"),
             },
             "indirect_variants" => match attribute.parse_meta() {
                 Ok(Meta::Word(_)) => result.indirect_variants = true,

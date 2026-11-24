@@ -29,7 +29,25 @@ use lemon_pdf::stream::{Stream, StreamFilter};
 use lemon_pdf::structure_tree::{
     NumberTree, StructElem, StructParent, StructTreeRoot, StructType,
 };
+use lemon_pdf::content::{ColorOperand, PageContext};
+use lemon_pdf::resources::XObjectKey;
 use lemon_pdf::{DocumentContext, Matrix, Page, Pt, Version};
+
+/// Paints an image into the rectangle with the lower left corner (`x`, `y`): the image is
+/// painted into the unit square.
+fn draw_image(
+    page: &mut PageContext<'_, '_>,
+    key: &XObjectKey,
+    x: Pt,
+    y: Pt,
+    width: Pt,
+    height: Pt,
+) -> std::io::Result<()> {
+    page.content.save_graphics_state()?;
+    page.content.concatenate_matrix(Matrix::new(width.0, 0.0, 0.0, height.0, x.0, y.0))?;
+    page.content.paint_xobject(key)?;
+    page.content.restore_graphics_state()
+}
 
 const MODES: [bool; 2] = [true, false];
 
@@ -71,12 +89,12 @@ fn add_text_page(context: &mut DocumentContext<'_>, text: &str, filter: Option<S
             PredefinedEncoding::WinAnsiEncoding,
         ));
         let font_ref = page_context.pdf_context.write_object(Font::Simple(font))?;
-        let font_key = page_context.add_font(font_ref);
-        page_context.begin_text()?;
-        page_context.set_font(&font_key, Pt(12.0))?;
-        page_context.set_position(Pt(72.0), Pt(720.0))?;
-        page_context.draw_simple_glyphs(&WINDOWS_1252.encode(text).0)?;
-        page_context.end_text()
+        let font_key = page_context.resources.add_font(font_ref);
+        page_context.content.begin_text()?;
+        page_context.content.set_font(&font_key, Pt(12.0))?;
+        page_context.content.move_text_position(Pt(72.0), Pt(720.0))?;
+        page_context.content.show_simple_glyphs(&WINDOWS_1252.encode(text).0)?;
+        page_context.content.end_text()
     })
     .unwrap();
     context.add_page(page).unwrap();
@@ -672,9 +690,9 @@ fn image_with_alpha_is_embedded_with_soft_mask() {
             let image = context.write_image(image).unwrap();
             let mut page = Page::new();
             page.add_content(context, None, |page_context| {
-                let key = page_context.add_xobject(image);
-                assert_eq!(page_context.add_xobject(image), key, "added twice");
-                page_context.draw_image(&key, Pt(10.0), Pt(20.0), Pt(200.0), Pt(100.0))
+                let key = page_context.resources.add_xobject(image);
+                assert_eq!(page_context.resources.add_xobject(image), key, "added twice");
+                draw_image(page_context, &key, Pt(10.0), Pt(20.0), Pt(200.0), Pt(100.0))
             })
             .unwrap();
             context.add_page(page).unwrap();
@@ -761,13 +779,13 @@ fn transparency_is_set_through_ext_gstate() {
         let (_, document) = build_and_load(mode, |context| {
             let mut page = Page::new();
             page.add_content(context, None, |page_context| {
-                page_context.set_fill_alpha(0.5)?;
-                page_context.set_stroke_alpha(0.25)?;
+                page_context.apply_ext_gstate(lemon_pdf::graphics_state::ExtGState::new().with_fill_alpha(0.5))?;
+                page_context.apply_ext_gstate(lemon_pdf::graphics_state::ExtGState::new().with_stroke_alpha(0.25))?;
                 // equal dictionaries share a resource name
-                page_context.set_fill_alpha(0.5)?;
-                page_context.set_blend_mode(BlendMode::Multiply)?;
-                page_context.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
-                page_context.fill_path()
+                page_context.apply_ext_gstate(lemon_pdf::graphics_state::ExtGState::new().with_fill_alpha(0.5))?;
+                page_context.apply_ext_gstate(lemon_pdf::graphics_state::ExtGState::new().with_blend_mode(BlendMode::Multiply))?;
+                page_context.content.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
+                page_context.content.fill_path()
             })
             .unwrap();
             context.add_page(page).unwrap();
@@ -819,23 +837,23 @@ fn shadings_and_patterns_are_resources() {
             );
             let mut page = Page::new();
             page.add_content(context, None, |c| {
-                let first = c.add_shading(axial.clone());
-                let second = c.add_shading(radial);
+                let first = c.resources.add_shading(axial.clone());
+                let second = c.resources.add_shading(radial);
                 // an equal shading shares its resource name
-                assert_eq!(c.add_shading(axial.clone()), first);
-                c.save_graphics_state()?;
-                c.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
-                c.clip(FillRule::NonZero)?;
-                c.end_path()?;
-                c.paint_shading(&first)?;
-                c.restore_graphics_state()?;
-                c.paint_shading(&second)?;
-                let pattern = c.add_shading_pattern(
+                assert_eq!(c.resources.add_shading(axial.clone()), first);
+                c.content.save_graphics_state()?;
+                c.content.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
+                c.content.clip(FillRule::NonZero)?;
+                c.content.end_path()?;
+                c.content.paint_shading(&first)?;
+                c.content.restore_graphics_state()?;
+                c.content.paint_shading(&second)?;
+                let pattern = c.resources.add_shading_pattern(
                     ShadingPattern::new(axial)
                         .with_matrix(Matrix::translation(Pt(10.0), Pt(0.0))),
                 );
-                c.set_fill_pattern(&pattern)?;
-                c.set_stroke_pattern(&pattern)
+                c.content.set_fill_color(ColorOperand::Pattern(&pattern))?;
+                c.content.set_stroke_color(ColorOperand::Pattern(&pattern))
             })
             .unwrap();
             context.add_page(page).unwrap();
@@ -902,11 +920,11 @@ fn mesh_shadings_are_streams_referenced_from_the_resources() {
             let mut page = Page::new();
             page.add_content(context, None, |c| {
                 for shading in [triangles.clone(), lattice, coons] {
-                    let key = c.add_shading(shading);
-                    c.paint_shading(&key)?;
+                    let key = c.resources.add_shading(shading);
+                    c.content.paint_shading(&key)?;
                 }
                 // an equal shading shares its name
-                assert_eq!(c.add_shading(triangles.clone()), c.add_shading(triangles.clone()));
+                assert_eq!(c.resources.add_shading(triangles.clone()), c.resources.add_shading(triangles.clone()));
                 Ok(())
             })
             .unwrap();
@@ -951,16 +969,16 @@ fn soft_masks_are_forms_in_the_graphics_state() {
                     Some(TransparencyGroup::new(ColorSpace::DeviceGray)),
                     None,
                     |c| {
-                        let key = c.add_shading(shading);
-                        c.paint_shading(&key)
+                        let key = c.resources.add_shading(shading);
+                        c.content.paint_shading(&key)
                     },
                 )
                 .unwrap();
             let mut page = Page::new();
             page.add_content(context, None, |c| {
                 c.apply_ext_gstate(ExtGState::new().with_soft_mask(SoftMask::luminosity(mask)))?;
-                c.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
-                c.fill_path()?;
+                c.content.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
+                c.content.fill_path()?;
                 c.apply_ext_gstate(ExtGState::new().with_soft_mask(SoftMask::None))
             })
             .unwrap();
@@ -1007,14 +1025,14 @@ fn forms_can_be_painted_as_xobjects() {
         let (_, document) = build_and_load(mode, |context| {
             let form = context
                 .write_form([Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0)], None, None, |c| {
-                    c.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
-                    c.fill_path()
+                    c.content.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
+                    c.content.fill_path()
                 })
                 .unwrap();
             let mut page = Page::new();
             page.add_content(context, None, |c| {
-                let key = c.add_xobject(form);
-                c.draw_xobject(&key)
+                let key = c.resources.add_xobject(form);
+                c.content.paint_xobject(&key)
             })
             .unwrap();
             context.add_page(page).unwrap();
@@ -1034,7 +1052,7 @@ fn forms_can_be_painted_as_xobjects() {
 fn pages_without_shadings_have_no_shading_resources() {
     let (_, document) = build_and_load(true, |context| {
         let mut page = Page::new();
-        page.add_content(context, None, |c| c.rect(Pt(0.0), Pt(0.0), Pt(1.0), Pt(1.0)))
+        page.add_content(context, None, |c| c.content.rect(Pt(0.0), Pt(0.0), Pt(1.0), Pt(1.0)))
             .unwrap();
         context.add_page(page).unwrap();
     });
@@ -1048,20 +1066,20 @@ fn vector_path_operators_are_written() {
     let (_, document) = build_and_load(true, |context| {
         let mut page = Page::new();
         page.add_content(context, Some(StreamFilter::Deflate), |c| {
-            c.line_width(Pt(2.0))?;
-            c.line_cap(LineCap::Round)?;
-            c.line_join(LineJoin::Bevel)?;
-            c.miter_limit(4.0)?;
-            c.dash_pattern(&[Pt(3.0), Pt(1.5)], Pt(0.0))?;
-            c.device_gray_stroke_color(0.5)?;
-            c.device_cmyk_fill_color(0.0, 1.0, 1.0, 0.0)?;
-            c.move_to(Pt(0.0), Pt(0.0))?;
-            c.curve_to(Pt(1.0), Pt(2.0), Pt(3.0), Pt(4.0), Pt(5.0), Pt(6.0))?;
-            c.close_fill_and_stroke_path(FillRule::EvenOdd)?;
-            c.rect(Pt(0.0), Pt(0.0), Pt(5.0), Pt(5.0))?;
-            c.clip(FillRule::NonZero)?;
-            c.end_path()?;
-            c.dash_pattern(&[], Pt(0.0))
+            c.content.set_line_width(Pt(2.0))?;
+            c.content.set_line_cap(LineCap::Round)?;
+            c.content.set_line_join(LineJoin::Bevel)?;
+            c.content.set_miter_limit(4.0)?;
+            c.content.set_dash_pattern(&[Pt(3.0), Pt(1.5)], Pt(0.0))?;
+            c.content.set_stroke_color(ColorOperand::Gray(0.5))?;
+            c.content.set_fill_color(ColorOperand::Cmyk(0.0, 1.0, 1.0, 0.0))?;
+            c.content.move_to(Pt(0.0), Pt(0.0))?;
+            c.content.curve_to(Pt(1.0), Pt(2.0), Pt(3.0), Pt(4.0), Pt(5.0), Pt(6.0))?;
+            c.content.close_fill_and_stroke_path(FillRule::EvenOdd)?;
+            c.content.rect(Pt(0.0), Pt(0.0), Pt(5.0), Pt(5.0))?;
+            c.content.clip(FillRule::NonZero)?;
+            c.content.end_path()?;
+            c.content.set_dash_pattern(&[], Pt(0.0))
         })
         .unwrap();
         context.add_page(page).unwrap();
@@ -1086,19 +1104,19 @@ fn tiling_patterns_repeat_a_cell() {
                     lemon_pdf::content::Matrix::new(1.0, 0.0, 0.0, 1.0, 5.0, 6.0),
                     None,
                     |c| {
-                        c.device_rgb_fill_color(1.0, 0.0, 0.0)?;
-                        c.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
-                        c.fill_path()
+                        c.content.set_fill_color(ColorOperand::Rgb(1.0, 0.0, 0.0))?;
+                        c.content.rect(Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))?;
+                        c.content.fill_path()
                     },
                 )
                 .unwrap();
             let mut page = Page::new();
             page.add_content(context, None, |c| {
-                let key = c.add_tiling_pattern(pattern);
-                assert_eq!(c.add_tiling_pattern(pattern), key, "added twice");
-                c.set_fill_pattern(&key)?;
-                c.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
-                c.fill_path()
+                let key = c.resources.add_tiling_pattern(pattern);
+                assert_eq!(c.resources.add_tiling_pattern(pattern), key, "added twice");
+                c.content.set_fill_color(ColorOperand::Pattern(&key))?;
+                c.content.rect(Pt(0.0), Pt(0.0), Pt(100.0), Pt(50.0))?;
+                c.content.fill_path()
             })
             .unwrap();
             context.add_page(page).unwrap();
@@ -1395,11 +1413,11 @@ fn lab_colors_use_a_named_color_space() {
         let (_, document) = build_and_load(mode, |context| {
             let mut page = Page::new();
             page.add_content(context, None, |page| {
-                let key = page.add_lab_color_space(LabColorSpace::d50());
+                let key = page.resources.add_color_space(LabColorSpace::d50());
                 // the same space again has the same name
-                assert_eq!(page.add_lab_color_space(LabColorSpace::d50()), key);
-                page.lab_fill_color(&key, 54.0, 106.5, 40.0)?;
-                page.lab_stroke_color(&key, 10.0, -20.0, 30.0)?;
+                assert_eq!(page.resources.add_color_space(LabColorSpace::d50()), key);
+                page.content.set_fill_color(ColorOperand::Space(&key, &[54.0, 106.5, 40.0]))?;
+                page.content.set_stroke_color(ColorOperand::Space(&key, &[10.0, -20.0, 30.0]))?;
                 Ok(())
             })
             .unwrap();
@@ -1423,25 +1441,30 @@ fn lab_colors_use_a_named_color_space() {
 
 #[test]
 fn color_spaces_of_every_kind_are_resources() {
-    use lemon_pdf::color_space::{CalRgbColorSpace, IccBasedColorSpace, LabColorSpace};
+    use lemon_pdf::color_space::{CalRgbColorSpace, CalRgbDict, IccBasedColorSpace, LabColorSpace};
+    use lemon_pdf::object::Precise;
 
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
             let profile = context.write_icc_profile(lemon_pdf::icc::display_p3_profile(), 3, Some(StreamFilter::Deflate)).unwrap();
             let mut page = Page::new();
             page.add_content(context, None, |page| {
-                let lab = page.add_color_space(LabColorSpace::d50());
-                let cal = page.add_color_space(CalRgbColorSpace {
-                    white_point: [0.9505, 1.0, 1.089],
-                    gamma: [2.2, 2.2, 2.2],
-                    matrix: [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505],
-                });
-                let icc = page.add_color_space(IccBasedColorSpace(profile));
+                let lab = page.resources.add_color_space(LabColorSpace::d50());
+                let cal = page.resources.add_color_space(CalRgbColorSpace(CalRgbDict {
+                    white_point: [0.9505, 1.0, 1.089].map(Precise),
+                    black_point: None,
+                    gamma: Some([2.2, 2.2, 2.2].map(Precise)),
+                    matrix: Some(
+                        [0.4124, 0.2126, 0.0193, 0.3576, 0.7152, 0.1192, 0.1805, 0.0722, 0.9505]
+                            .map(Precise),
+                    ),
+                }));
+                let icc = page.resources.add_color_space(IccBasedColorSpace(profile));
                 assert_eq!([lab.clone(), cal.clone(), icc.clone()].len(), 3);
                 assert_ne!(lab, cal);
                 assert_ne!(cal, icc);
-                page.set_fill_color_components(&icc, &[1.0, 0.25, 0.0])?;
-                page.set_stroke_color_components(&cal, &[0.5, 0.5, 0.5])?;
+                page.content.set_fill_color(ColorOperand::Space(&icc, &[1.0, 0.25, 0.0]))?;
+                page.content.set_stroke_color(ColorOperand::Space(&cal, &[0.5, 0.5, 0.5]))?;
                 Ok(())
             })
             .unwrap();
@@ -1450,8 +1473,8 @@ fn color_spaces_of_every_kind_are_resources() {
         let page = document.get_pages().values().next().copied().unwrap();
         let content = String::from_utf8(document.get_page_content(page)).unwrap();
         let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(content.contains("/CS2 cs 1 0.25 0 sc"), "{content}");
-        assert!(content.contains("/CS1 CS 0.5 0.5 0.5 SC"), "{content}");
+        assert!(content.contains("/CS2 cs 1 0.25 0 sc"), "{}", content);
+        assert!(content.contains("/CS1 CS 0.5 0.5 0.5 SC"), "{}", content);
         let (resources, _) = document.get_page_resources(page).unwrap();
         let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
         assert_eq!(spaces.get(b"CS0").unwrap().as_array().unwrap()[0].as_name().unwrap(), b"Lab");
@@ -1474,12 +1497,12 @@ fn the_rendering_intent_is_an_operator() {
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
             let mut page = Page::new();
-            page.add_content(context, None, |page| page.set_rendering_intent(RenderingIntent::Perceptual)).unwrap();
+            page.add_content(context, None, |page| page.content.set_rendering_intent(RenderingIntent::Perceptual)).unwrap();
             context.add_page(page).unwrap();
         });
         let page = document.get_pages().values().next().copied().unwrap();
         let content = String::from_utf8(document.get_page_content(page)).unwrap();
-        assert!(content.split_whitespace().collect::<Vec<_>>().join(" ").contains("/Perceptual ri"), "{content}");
+        assert!(content.split_whitespace().collect::<Vec<_>>().join(" ").contains("/Perceptual ri"), "{}", content);
     }
 }
 
@@ -1491,8 +1514,8 @@ fn an_icc_profile_is_written_once_for_all_pages() {
                 let space = context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
                 let mut page = Page::new();
                 page.add_content(context, None, |page| {
-                    let name = page.add_color_space(space);
-                    page.set_fill_color_components(&name, &[1.0, 0.0, 0.0])
+                    let name = page.resources.add_color_space(space);
+                    page.content.set_fill_color(ColorOperand::Space(&name, &[1.0, 0.0, 0.0]))
                 })
                 .unwrap();
                 context.add_page(page).unwrap();
@@ -1506,21 +1529,26 @@ fn an_icc_profile_is_written_once_for_all_pages() {
 
 #[test]
 fn colors_are_written_with_more_than_two_decimals() {
-    use lemon_pdf::color_space::CalRgbColorSpace;
+    use lemon_pdf::color_space::{CalRgbColorSpace, CalRgbDict};
+    use lemon_pdf::object::Precise;
 
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
             let mut page = Page::new();
             page.add_content(context, None, |page| {
                 // 187 / 255 would be 0.73 with two decimals, which is a different byte
-                page.device_rgb_fill_color(187.0 / 255.0, 0.2, 1.0)?;
-                page.device_gray_stroke_color(1.0 / 3.0)?;
-                let space = page.add_color_space(CalRgbColorSpace {
-                    white_point: [0.950_455_927, 1.0, 1.089_057_751],
-                    gamma: [1.0; 3],
-                    matrix: [0.486_570_949, 0.228_974_564, 0.0, 0.265_667_693, 0.691_738_522, 0.045_113_382, 0.198_217_285, 0.079_286_914, 1.043_944_369],
-                });
-                page.set_fill_color_components(&space, &[0.123_456_789, 0.5, 0.000_001_4])
+                page.content.set_fill_color(ColorOperand::Rgb(187.0 / 255.0, 0.2, 1.0))?;
+                page.content.set_stroke_color(ColorOperand::Gray(1.0 / 3.0))?;
+                let space = page.resources.add_color_space(CalRgbColorSpace(CalRgbDict {
+                    white_point: [0.950_455_927, 1.0, 1.089_057_751].map(Precise),
+                    black_point: None,
+                    gamma: Some([1.0; 3].map(Precise)),
+                    matrix: Some(
+                        [0.486_570_949, 0.228_974_564, 0.0, 0.265_667_693, 0.691_738_522, 0.045_113_382, 0.198_217_285, 0.079_286_914, 1.043_944_369]
+                            .map(Precise),
+                    ),
+                }));
+                page.content.set_fill_color(ColorOperand::Space(&space, &[0.123_456_789, 0.5, 0.000_001_4]))
             })
             .unwrap();
             context.add_page(page).unwrap();
@@ -1542,14 +1570,15 @@ fn colors_are_written_with_more_than_two_decimals() {
 #[test]
 fn the_defaults_of_the_colour_spaces_are_the_ones_that_were_measured() {
     use lemon_pdf::color_space::{CalRgbColorSpace, LabColorSpace, D50_WHITE_POINT};
+    use lemon_pdf::object::Precise;
 
     // Lab: +-128 is right on an iPhone, +-256 shows a* and b* at half
-    assert_eq!(LabColorSpace::d50().range, [-128.0, 128.0, -128.0, 128.0]);
+    assert_eq!(LabColorSpace::d50().0.range, Some([-128.0, 128.0, -128.0, 128.0].map(Precise)));
     // the XYZ carrier: the components (1, 1, 1) are the white point, whatever the white point is
     for white in [D50_WHITE_POINT, [0.950_456, 1.0, 1.089_058]] {
         let space = CalRgbColorSpace::xyz_carrier(white);
-        let m = space.matrix;
-        assert_eq!(space.gamma, [1.0; 3]);
+        let m = space.0.matrix.unwrap().map(|value| value.0);
+        assert_eq!(space.0.gamma, Some([1.0; 3].map(Precise)));
         // the columns of the matrix add up to the white point
         assert_eq!([m[0] + m[3] + m[6], m[1] + m[4] + m[7], m[2] + m[5] + m[8]], white);
     }
@@ -1569,17 +1598,17 @@ fn a_default_colour_space_is_in_the_resources_of_the_page() {
                 let srgb = context.icc_color_space("srgb", lemon_pdf::icc::srgb_profile, 3, None).unwrap();
                 let mut page = Page::new();
                 page.add_content(context, None, |page| {
-                    page.set_default_color_space(DefaultColorSpace::Rgb, srgb);
+                    page.resources.set_default_color_space(DefaultColorSpace::Rgb, srgb);
                     // setting it again replaces it, and the names of other spaces stay distinct
-                    page.set_default_color_space(DefaultColorSpace::Rgb, srgb);
+                    page.resources.set_default_color_space(DefaultColorSpace::Rgb, srgb);
                     let p3 = page.pdf_context.icc_color_space("p3", lemon_pdf::icc::display_p3_profile, 3, None).unwrap();
-                    let name = page.add_color_space(p3);
-                    page.set_fill_color_components(&name, &[1.0, 0.0, 0.0])?;
+                    let name = page.resources.add_color_space(p3);
+                    page.content.set_fill_color(ColorOperand::Space(&name, &[1.0, 0.0, 0.0]))?;
                     // the same space as the default one is still a space of its own, not the default
-                    let same = page.add_color_space(srgb);
-                    assert_ne!(same.as_str(), "DefaultRGB");
-                    page.set_fill_color_components(&same, &[0.2, 0.4, 0.6])?;
-                    page.device_rgb_fill_color(0.2, 0.4, 0.6)
+                    let same = page.resources.add_color_space(srgb);
+                    assert_ne!(same.name().as_str(), "DefaultRGB");
+                    page.content.set_fill_color(ColorOperand::Space(&same, &[0.2, 0.4, 0.6]))?;
+                    page.content.set_fill_color(ColorOperand::Rgb(0.2, 0.4, 0.6))
                 })
                 .unwrap();
                 context.add_page(page).unwrap();
@@ -1609,8 +1638,8 @@ fn an_image_can_have_an_icc_profile() {
             let reference = context.write_image(image).unwrap();
             let mut page = Page::new();
             page.add_content(context, None, |page| {
-                let name = page.add_xobject(reference);
-                page.draw_image(&name, Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))
+                let name = page.resources.add_xobject(reference);
+                draw_image(page, &name, Pt(0.0), Pt(0.0), Pt(10.0), Pt(10.0))
             })
             .unwrap();
             context.add_page(page).unwrap();

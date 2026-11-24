@@ -26,6 +26,7 @@ mod document;
 pub mod font;
 pub mod form;
 pub mod pattern;
+pub mod resources;
 pub mod graphics_state;
 pub mod icc;
 pub mod image;

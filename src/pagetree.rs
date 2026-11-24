@@ -12,7 +12,7 @@
 //    See the License for the specific language governing permissions and
 //    limitations under the License.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::f64::consts::SQRT_2;
 use std::io::Result;
 
@@ -30,7 +30,7 @@ use crate::pattern::Pattern;
 use crate::shading::Shading;
 use crate::image::XObject;
 use crate::object::{IndirectReference, Name, Object, Value};
-use crate::stream::{StreamEncoder, StreamFilter};
+use crate::stream::StreamFilter;
 use crate::Pt;
 
 /// A node of the page tree with other page tree nodes or pages as its kids.
@@ -120,34 +120,16 @@ impl Page {
         Ok(annotation)
     }
 
-    fn get_context<'context, 'borrow>(
-        &mut self,
-        context: &'borrow mut DocumentContext<'context>,
-        stream_filter: Option<StreamFilter>,
-    ) -> PageContext<'_, 'context, 'borrow> {
-        PageContext {
-            fonts: HashMap::new(),
-            x_objects: HashMap::new(),
-            ext_g_states: Vec::new(),
-            shadings: Vec::new(),
-            patterns: Vec::new(),
-            color_spaces: Vec::new(),
-            page: self,
-            content_stream: StreamEncoder::new(stream_filter),
-            pdf_context: context,
-        }
-    }
-
-    pub fn add_content<'context, 'borrow>(
+    /// Draws the content of the page: `content_f` writes its operators and adds its resources.
+    pub fn add_content<'context>(
         &mut self,
         context: &mut DocumentContext<'context>,
         stream_filter: Option<StreamFilter>,
-        content_f: impl FnOnce(&mut PageContext<'_, 'context, '_>) -> Result<()>,
+        content_f: impl FnOnce(&mut PageContext<'_, 'context>) -> Result<()>,
     ) -> Result<()> {
-        let mut page_context = self.get_context(context, stream_filter);
+        let mut page_context = PageContext::new(context, stream_filter);
         content_f(&mut page_context)?;
-        page_context.finish()?;
-        Ok(())
+        page_context.finish(self)
     }
 
     // pub fn set_resources(&mut self, resources: impl Into<Object<Value>>) {
