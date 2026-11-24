@@ -132,6 +132,7 @@ impl Page {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            opacity: Default::default(),
             page: self,
             content_stream: StreamEncoder::new(stream_filter),
             pdf_context: context,

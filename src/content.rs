@@ -66,6 +66,23 @@ pub struct ContentStreamDict {}
 /// A content stream (ISO 32000-1, 7.8.2): the operators that paint a page.
 pub type ContentStream = Stream<ContentStreamDict>;
 
+/// The constant opacity (`ca` and `CA`) that is in effect in the content stream being written,
+/// as far as it is known. It follows `q` and `Q`, which save and restore the opacity.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Opacity {
+    /// `None` after something that changes the opacity in a way that is not followed.
+    fill: Option<f64>,
+    stroke: Option<f64>,
+    saved: Vec<(Option<f64>, Option<f64>)>,
+}
+
+impl Default for Opacity {
+    /// A content stream starts out opaque.
+    fn default() -> Self {
+        Opacity { fill: Some(1.0), stroke: Some(1.0), saved: Vec::new() }
+    }
+}
+
 #[derive(Debug)]
 pub struct PageContext<'page, 'context, 'context_borrow> {
     pub(crate) fonts: HashMap<IndirectReference<Font>, Name>,
@@ -78,6 +95,8 @@ pub struct PageContext<'page, 'context, 'context_borrow> {
     pub(crate) patterns: Vec<(Pattern, Name)>,
     /// The named colour spaces.
     pub(crate) color_spaces: Vec<(ColorSpaceResource, Name)>,
+    /// The opacity that the content written so far has set, see [`PageContext::ensure_fill_alpha`].
+    pub(crate) opacity: Opacity,
     pub(crate) content_stream: StreamEncoder,
     pub(crate) page: &'page mut Page,
     pub pdf_context: &'context_borrow mut DocumentContext<'context>,
@@ -193,6 +212,14 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
 
     /// Applies a graphics state parameter dictionary from `add_ext_gstate` (`gs` operator).
     pub fn set_ext_gstate(&mut self, key: &Name) -> Result<()> {
+        if let Some((state, _)) = self.ext_g_states.iter().find(|(_, name)| name == key) {
+            if let Some(alpha) = state.fill_alpha {
+                self.opacity.fill = Some(alpha);
+            }
+            if let Some(alpha) = state.stroke_alpha {
+                self.opacity.stroke = Some(alpha);
+            }
+        }
         self.write_operation1(key, "gs")
     }
 
@@ -210,6 +237,47 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     /// Sets the opacity (0 to 1) of strokes.
     pub fn set_stroke_alpha(&mut self, alpha: f64) -> Result<()> {
         self.apply_ext_gstate(ExtGState::new().with_stroke_alpha(alpha))
+    }
+
+    /// Like [`set_fill_alpha`](Self::set_fill_alpha), but writes nothing if the fill opacity is
+    /// known to be `alpha` already: the page context follows the opacity that the content set
+    /// (`set_fill_alpha`, `set_stroke_alpha`, `gs` with an `ExtGState` that has one) and what
+    /// `q` and `Q` restore. A page, a form and a pattern start out opaque; the opacity that a
+    /// form inherits from the place it is painted at is not known to it, so a form that is
+    /// painted under another opacity has to set its own explicitly (`set_fill_alpha`) if it
+    /// depends on it.
+    pub fn ensure_fill_alpha(&mut self, alpha: f64) -> Result<()> {
+        let alpha = crate::graphics_state::clamp_alpha(alpha);
+        if self.opacity.fill == Some(alpha) {
+            return Ok(());
+        }
+        self.set_fill_alpha(alpha)
+    }
+
+    /// Like [`set_stroke_alpha`](Self::set_stroke_alpha), but writes nothing if the stroke
+    /// opacity is known to be `alpha` already, see [`ensure_fill_alpha`](Self::ensure_fill_alpha).
+    pub fn ensure_stroke_alpha(&mut self, alpha: f64) -> Result<()> {
+        let alpha = crate::graphics_state::clamp_alpha(alpha);
+        if self.opacity.stroke == Some(alpha) {
+            return Ok(());
+        }
+        self.set_stroke_alpha(alpha)
+    }
+
+    /// Makes what is painted next opaque (fills and strokes), for what has no colour of its own
+    /// (an image) and must not take the transparency of the colour set before. Writes nothing
+    /// that is not needed.
+    pub fn ensure_opaque(&mut self) -> Result<()> {
+        self.ensure_fill_alpha(1.0)?;
+        self.ensure_stroke_alpha(1.0)
+    }
+
+    /// Forgets the opacity that the page context knows, so that the next `ensure_*` writes it
+    /// again. For what changes the opacity without the page context seeing it (an operator
+    /// written with `apply_operator`, or a `gs` that was applied some other way).
+    pub fn forget_alpha(&mut self) {
+        self.opacity.fill = None;
+        self.opacity.stroke = None;
     }
 
     pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> Result<()> {
@@ -348,10 +416,15 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
     }
 
     pub fn save_graphics_state(&mut self) -> Result<()> {
+        self.opacity.saved.push((self.opacity.fill, self.opacity.stroke));
         self.apply_operator("q")
     }
 
     pub fn restore_graphics_state(&mut self) -> Result<()> {
+        if let Some((fill, stroke)) = self.opacity.saved.pop() {
+            self.opacity.fill = fill;
+            self.opacity.stroke = stroke;
+        }
         self.apply_operator("Q")
     }
 
@@ -602,6 +675,7 @@ impl<'context> DocumentContext<'context> {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            opacity: Opacity::default(),
             content_stream: StreamEncoder::new(stream_filter),
             page: &mut page,
             pdf_context: self,
@@ -639,6 +713,7 @@ impl<'context> DocumentContext<'context> {
             shadings: Vec::new(),
             patterns: Vec::new(),
             color_spaces: Vec::new(),
+            opacity: Opacity::default(),
             content_stream: StreamEncoder::new(stream_filter),
             page: &mut page,
             pdf_context: self,

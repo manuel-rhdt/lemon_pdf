@@ -792,6 +792,72 @@ fn transparency_is_set_through_ext_gstate() {
 }
 
 #[test]
+fn ensure_alpha_skips_what_is_in_effect() {
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                // a page starts out opaque
+                c.ensure_opaque()?;
+                c.ensure_fill_alpha(0.5)?;
+                c.ensure_fill_alpha(0.5)?;
+                // `q` and `Q` save and restore the opacity
+                c.save_graphics_state()?;
+                c.ensure_fill_alpha(0.25)?;
+                c.restore_graphics_state()?;
+                c.ensure_fill_alpha(0.5)?;
+                // a state applied some other way is followed too
+                c.apply_ext_gstate(ExtGState::new().with_fill_alpha(1.0))?;
+                c.ensure_fill_alpha(1.0)?;
+                // what is not followed has to be forgotten
+                c.forget_alpha();
+                c.ensure_fill_alpha(1.0)?;
+                c.ensure_stroke_alpha(1.0)?;
+                c.ensure_opaque()
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let (_, content) = single_page(&document);
+        assert_eq!(
+            content.trim(),
+            "/GS0 gs q /GS1 gs Q /GS2 gs /GS2 gs /GS3 gs"
+        );
+    }
+}
+
+#[test]
+fn colors_are_written_in_the_space_that_holds_them() {
+    use lemon_pdf::color::{ColorValue, RgbSpace};
+    for &mode in &MODES {
+        let (_, document) = build_and_load(mode, |context| {
+            let mut page = Page::new();
+            page.add_content(context, None, |c| {
+                c.set_srgb_device_defaults()?;
+                c.set_fill_color(ColorValue::Srgb([1.0, 0.0, 0.5]))?;
+                c.set_stroke_color(ColorValue::Rgb(RgbSpace::DisplayP3, [0.1, 0.2, 0.3]))?;
+                // D65 white is neutral CIELAB
+                c.set_fill_color(ColorValue::XyzD65([0.950_455, 1.0, 1.089_058]))?;
+                // the green of Rec. 2020: a* is beyond -128, so it is in the Rec. 2020 space
+                c.set_fill_color(ColorValue::XyzD65([0.1446, 0.678, 0.0281]))?;
+                Ok(())
+            })
+            .unwrap();
+            context.add_page(page).unwrap();
+        });
+        let (resources, content) = single_page(&document);
+        let spaces = resources.get(b"ColorSpace").unwrap().as_dict().unwrap();
+        assert!(spaces.has(b"DefaultRGB"));
+        assert!(content.contains("1 0 0.5 rg"), "{}", content);
+        assert!(content.contains("0.1 0.2 0.3 SC"), "{}", content);
+        assert!(content.contains("/CS2 cs 100 "), "{}", content);
+        // the fourth space (after the default, P3 and Lab) is the one of Rec. 2020
+        assert!(content.trim_end().ends_with("/CS3 cs 0 1 0.01216 sc"), "{}", content);
+        assert!(spaces.has(b"CS3"));
+    }
+}
+
+#[test]
 fn shadings_and_patterns_are_resources() {
     for &mode in &MODES {
         let (_, document) = build_and_load(mode, |context| {
@@ -1450,8 +1516,8 @@ fn color_spaces_of_every_kind_are_resources() {
         let page = document.get_pages().values().next().copied().unwrap();
         let content = String::from_utf8(document.get_page_content(page)).unwrap();
         let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(content.contains("/CS2 cs 1 0.25 0 sc"), "{content}");
-        assert!(content.contains("/CS1 CS 0.5 0.5 0.5 SC"), "{content}");
+        assert!(content.contains("/CS2 cs 1 0.25 0 sc"), "{}", content);
+        assert!(content.contains("/CS1 CS 0.5 0.5 0.5 SC"), "{}", content);
         let (resources, _) = document.get_page_resources(page).unwrap();
         let spaces = resources.unwrap().get(b"ColorSpace").unwrap().as_dict().unwrap();
         assert_eq!(spaces.get(b"CS0").unwrap().as_array().unwrap()[0].as_name().unwrap(), b"Lab");
@@ -1479,7 +1545,7 @@ fn the_rendering_intent_is_an_operator() {
         });
         let page = document.get_pages().values().next().copied().unwrap();
         let content = String::from_utf8(document.get_page_content(page)).unwrap();
-        assert!(content.split_whitespace().collect::<Vec<_>>().join(" ").contains("/Perceptual ri"), "{content}");
+        assert!(content.split_whitespace().collect::<Vec<_>>().join(" ").contains("/Perceptual ri"), "{}", content);
     }
 }
 
