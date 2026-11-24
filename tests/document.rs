@@ -1461,9 +1461,9 @@ fn lab_colors_use_a_named_color_space() {
         let (_, document) = build_and_load(mode, |context| {
             let mut page = Page::new();
             page.add_content(context, None, |page| {
-                let key = page.add_lab_color_space(LabColorSpace::d50());
+                let key = page.add_color_space(LabColorSpace::d50());
                 // the same space again has the same name
-                assert_eq!(page.add_lab_color_space(LabColorSpace::d50()), key);
+                assert_eq!(page.add_color_space(LabColorSpace::d50()), key);
                 page.lab_fill_color(&key, 54.0, 106.5, 40.0)?;
                 page.lab_stroke_color(&key, 10.0, -20.0, 30.0)?;
                 Ok(())

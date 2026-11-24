@@ -233,7 +233,7 @@ impl PageContext<'_, '_, '_> {
             a *= scale;
             b *= scale;
         }
-        let name = self.add_lab_color_space(lab);
+        let name = self.add_color_space(lab);
         let lightness = round(lightness.clamp(0.0, 100.0));
         if stroke {
             self.lab_stroke_color(&name, lightness, round(a), round(b))

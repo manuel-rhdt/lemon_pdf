@@ -18,7 +18,7 @@ use std::io::{Result, Write};
 use lemon_pdf_derive::{PdfDictionary, PdfFormat};
 use crate as lemon_pdf;
 
-use crate::color_space::{ColorSpaceResource, LabColorSpace};
+use crate::color_space::ColorSpaceResource;
 use crate::font::Font;
 use crate::graphics_state::{BlendMode, ExtGState, FillRule, LineCap, LineJoin};
 use crate::image::XObject;
@@ -138,12 +138,6 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         key
     }
 
-    /// Adds a colour space to the resources of the page and returns its resource name. Adding an
-    /// equal space again returns the same name.
-    pub fn add_lab_color_space(&mut self, space: LabColorSpace) -> Name {
-        self.add_color_space(space)
-    }
-
     /// Adds a colour space (Lab, CalRGB or one from an ICC profile) to the resources of the page
     /// and returns its resource name. Adding an equal space again returns the same name.
     pub fn add_color_space(&mut self, space: impl Into<ColorSpaceResource>) -> Name {
@@ -196,14 +190,14 @@ impl<'page, 'context, 'context_borrow> PageContext<'page, 'context, 'context_bor
         self.apply_operator("SC")
     }
 
-    /// Makes fills use a colour of a Lab space from `add_lab_color_space` (`cs` and `sc`
+    /// Makes fills use a colour of a Lab space from `add_color_space` (`cs` and `sc`
     /// operators).
     pub fn lab_fill_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
         self.write_operation1(space, "cs")?;
         self.write_operation3(Precise(l), Precise(a), Precise(b), "sc")
     }
 
-    /// Makes strokes use a colour of a Lab space from `add_lab_color_space` (`CS` and `SC`
+    /// Makes strokes use a colour of a Lab space from `add_color_space` (`CS` and `SC`
     /// operators).
     pub fn lab_stroke_color(&mut self, space: &Name, l: f64, a: f64, b: f64) -> Result<()> {
         self.write_operation1(space, "CS")?;
